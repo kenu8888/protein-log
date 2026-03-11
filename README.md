@@ -1,40 +1,52 @@
-<<<<<<< HEAD
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Protein Log
 
-## Getting Started
+Protein Log は、プロテインのブランド・商品・フレーバー・レビューを整理し、
+ユーザーが自分に合うプロテインを見つけられるようにするレビュー型データベースサービスです。
 
-First, run the development server:
+## 目的
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+膨大にあるプロテイン情報を整理し、
+ユーザーが味・飲みやすさ・甘さ・評価などを参考に比較できる状態を作ることを目的としています。
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 現在の技術構成
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Next.js
+- React
+- TypeScript
+- Supabase
+- PostgreSQL
+- GitHub
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 現在の実装状況
 
-## Learn More
+- Next.js プロジェクト作成済み
+- Supabase 接続済み
+- brands テーブル表示済み
+- products テーブル表示済み
+- flavors テーブル表示済み
+- ブランド → 商品 → フレーバー の一覧表示が動作済み
+- GitHub 連携済み
 
-To learn more about Next.js, take a look at the following resources:
+## 現在の画面構成
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```text
+Brands
+↓
+Products
+↓
+Flavors
+#今後の予定
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+reviews テーブル追加
 
-## Deploy on Vercel
+レビュー一覧表示
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+レビュー投稿フォーム
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-=======
-# protein-log
->>>>>>> 6034a5f6fac45b70ec2fc553611368bef2231b70
+rating / sweetness / mixability の保存
+
+ログイン機能
+
+ランキング
+
+SEO向けURL設計
