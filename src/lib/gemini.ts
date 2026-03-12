@@ -1,6 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 
-export const ai = new GoogleGenAI({});
+const googleApiKey = process.env.GOOGLE_API_KEY;
+// 明示的に API キーを渡して、ADC 経由のスコープ不足を避ける
+export const ai = new GoogleGenAI(
+  googleApiKey ? { apiKey: googleApiKey } : {}
+);
 
 export async function askGeminiText(prompt: string) {
   const response = await ai.models.generateContent({
