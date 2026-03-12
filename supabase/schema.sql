@@ -78,12 +78,21 @@ create table if not exists manufacturer_sources (
   id uuid primary key default gen_random_uuid(),
   manufacturer_name text not null,
   url text not null unique,
+  -- メーカーごとにパーサーを切り替えるための安定したコード（例: 'myprotein', 'goldsgym'）
+  manufacturer_code text,
   created_at timestamp with time zone default now()
 );
 
 create table if not exists manufacturer_products (
   id uuid primary key default gen_random_uuid(),
   manufacturer_name text not null,
+  -- manufacturer_sources.manufacturer_code と揃えるためのコード
+  manufacturer_code text,
+  -- 元ページから取得した生の表記（パーサー改善や再解析用）
+  raw_product_name text,
+  raw_flavor text,
+  raw_unit_text text,
+  raw_price_text text,
   product_name text,
   flavor text,
   unit_text text,

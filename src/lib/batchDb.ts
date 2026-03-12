@@ -118,11 +118,17 @@ export async function saveClassificationResult(
 
   // メーカーサイト由来: manufacturer_products から数値価格・画像を補完
   if (
-    sourceRow?.source_name === "manufacturer" &&
-    typeof sourceRow.source_key === "string" &&
-    sourceRow.source_key.startsWith("manufacturer:")
+    sourceRow?.source_name?.startsWith("manufacturer") &&
+    typeof sourceRow.source_key === "string"
   ) {
-    const upsertKey = (sourceRow.source_key as string).split(":")[1];
+    // 互換性のため:
+    // - "manufacturer:UPsertKey" 形式なら ":" 以降
+    // - それ以外は source_key 全体を upsert_key とみなす
+    const rawKey = sourceRow.source_key as string;
+    const upsertKey = rawKey.includes(":")
+      ? rawKey.split(":").slice(1).join(":")
+      : rawKey;
+
     if (upsertKey) {
       const { data: mp, error: mpError } = await client
         .from("manufacturer_products")
