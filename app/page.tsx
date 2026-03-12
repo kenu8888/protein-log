@@ -94,6 +94,80 @@ const flavorTypeOptions = [
 
 const priceTierOptions = ["低価格帯", "中価格帯", "高価格帯"] as const
 
+type ClassifiedProtein = {
+  id: string
+  manufacturer: string | null
+  product_name: string | null
+  flavor: string | null
+  price_jpy: number | null
+  protein_grams_per_serving: number | null
+  avg_rating: number | null
+  price_per_kg: number | null
+  flavor_category: string | null
+  display_manufacturer: string | null
+  display_product_name: string | null
+  display_flavor: string | null
+  product_url: string | null
+  product_image_url: string | null
+  confidence: number | null
+}
+
+type ClassifiedProtein = {
+  id: string
+  manufacturer: string | null
+  product_name: string | null
+  flavor: string | null
+  price_jpy: number | null
+  protein_grams_per_serving: number | null
+  avg_rating: number | null
+  price_per_kg: number | null
+  flavor_category: string | null
+  display_manufacturer: string | null
+  display_product_name: string | null
+  display_flavor: string | null
+  product_url: string | null
+  product_image_url: string | null
+  confidence: number | null
+}
+
+function formatProductTitle(p: ClassifiedProtein): string {
+  const manufacturer = (p.manufacturer ?? "").replace(/（[^）]*）/g, "").trim()
+  const flavor = (p.flavor ?? "").trim()
+  let name = (p.product_name ?? "").trim()
+
+  if (!name && manufacturer && flavor) {
+    return `${manufacturer} ${flavor}`
+  }
+
+  // 括弧内を削除
+  name = name.replace(/（[^）]*）/g, "").replace(/\([^)]*\)/g, "")
+
+  // 容量・規格っぽい表記を削除（1kg, 1 kg, 1000g など）
+  name = name.replace(/\d+(\.\d+)?\s*(kg|KG|ｋｇ|g|G|グラム|キロ)/g, "")
+  // "100" 単体や "WPCプロテイン" など、ノイズになりがちなワードを削る
+  name = name.replace(/\b100\b/g, "")
+  name = name.replace(/WPCプロテイン?/gi, "")
+  name = name.replace(/\s+/g, " ").trim()
+
+  // 「ホエイ プロテイン」までを優先的に残す
+  const proteinMatch = name.match(/.*?(ホエイ|ホエー)?\s*プロテイン/)
+  let proteinPart = proteinMatch ? proteinMatch[0].trim() : ""
+
+  // それでもなければ、先頭2〜3語だけ残す
+  if (!proteinPart) {
+    const words = name.split(" ")
+    proteinPart = words.slice(0, 3).join(" ")
+  }
+
+  const parts: string[] = []
+  if (manufacturer) parts.push(manufacturer)
+  if (proteinPart) parts.push(proteinPart)
+  if (flavor) parts.push(flavor)
+
+  const result = parts.join(" ").trim()
+  return result || name || manufacturer || "名称不明"
+}
+
 export default function Page() {
   const [brands, setBrands] = useState<Brand[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -109,8 +183,14 @@ export default function Page() {
   const [selectedFlavorTypes, setSelectedFlavorTypes] = useState<string[]>([])
   const [selectedPriceTiers, setSelectedPriceTiers] = useState<string[]>([])
 
+  const [classified, setClassified] = useState<ClassifiedProtein[]>([])
+  const [classifiedMessage, setClassifiedMessage] = useState<string>("")
+  const [proteinCount, setProteinCount] = useState<number | null>(null)
+
   useEffect(() => {
     loadBrands()
+    loadClassifiedProteins()
+    loadProteinCount()
   }, [])
 
   async function loadBrands() {
@@ -200,6 +280,71 @@ export default function Page() {
     }
   }
 
+  async function loadClassifiedProteins() {
+    const { data, error } = await supabase
+      .from("product_classification_results")
+      .select(
+        "id, manufacturer, product_name, flavor, price_jpy, protein_grams_per_serving, avg_rating, price_per_kg, flavor_category, display_manufacturer, display_product_name, display_flavor, product_url, product_image_url, confidence, is_protein_powder"
+      )
+      .eq("is_protein_powder", true)
+      .order("created_at", { ascending: false })
+      .limit(30)
+
+    if (error) {
+      console.error(error)
+      setClassifiedMessage("プロテイン一覧の取得でエラーが発生しました。")
+      return
+    }
+
+    if (!data || data.length === 0) {
+      setClassified([])
+      setClassifiedMessage("まだ登録されているプロテインがありません。")
+      return
+    }
+
+    setClassified(
+      data.map((row: any) => ({
+        id: row.id as string,
+        manufacturer: (row.manufacturer as string) ?? null,
+        product_name: (row.product_name as string) ?? null,
+        flavor: (row.flavor as string) ?? null,
+        price_jpy:
+          typeof row.price_jpy === "number" ? (row.price_jpy as number) : null,
+        protein_grams_per_serving:
+          typeof row.protein_grams_per_serving === "number"
+            ? (row.protein_grams_per_serving as number)
+            : null,
+        avg_rating:
+          typeof row.avg_rating === "number" ? (row.avg_rating as number) : null,
+        price_per_kg:
+          typeof row.price_per_kg === "number" ? (row.price_per_kg as number) : null,
+        flavor_category: (row.flavor_category as string) ?? null,
+        display_manufacturer: (row.display_manufacturer as string) ?? null,
+        display_product_name: (row.display_product_name as string) ?? null,
+        display_flavor: (row.display_flavor as string) ?? null,
+        product_url: (row.product_url as string) ?? null,
+        product_image_url: (row.product_image_url as string) ?? null,
+        confidence:
+          typeof row.confidence === "number" ? (row.confidence as number) : null
+      }))
+    )
+    setClassifiedMessage("")
+  }
+
+  async function loadProteinCount() {
+    const { count, error } = await supabase
+      .from("product_classification_results")
+      .select("id", { count: "exact", head: true })
+      .eq("is_protein_powder", true)
+
+    if (error) {
+      console.error(error)
+      return
+    }
+
+    setProteinCount(count ?? 0)
+  }
+
   return (
     <div className="min-h-screen bg-white px-4 py-10 text-gray-900">
       <main className="mx-auto flex max-w-5xl flex-col gap-10">
@@ -214,7 +359,11 @@ export default function Page() {
               </p>
             </div>
             <div className="rounded-full border bg-gray-50 px-4 py-1 text-xs text-gray-600">
-              MVP / Brands → Products → Flavors → Reviews
+              登録プロテイン数{" "}
+              <span className="font-semibold">
+                {proteinCount != null ? proteinCount.toLocaleString() : "―"}
+              </span>
+              件
             </div>
           </div>
           {message && (
@@ -225,47 +374,44 @@ export default function Page() {
           )}
         </header>
 
-        <section className="space-y-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <section className="space-y-4">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-gray-500">
+              <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
                 PICK UP
               </h2>
-              <p className="mt-1 text-base font-medium text-gray-900">
-                アマゾンランキングTOP・急上昇プロテイン・レビュー最多プロテイン
-              </p>
-              <p className="mt-1 text-xs text-gray-500">
-                今チェックしておきたい定番＆話題のプロテインをピックアップしました。
+              <p className="mt-0.5 text-sm font-medium text-gray-900">
+                注目のプロテイン 3 選
               </p>
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-3">
             {featuredProteins.map((item) => (
               <article
                 key={item.id}
-                className="flex flex-col overflow-hidden rounded-2xl border bg-white shadow-sm"
+                className="flex flex-col overflow-hidden rounded-xl border bg-white"
               >
                 <Link href={`/protein/${item.id}`} className="flex flex-1 flex-col">
-                  <div className="relative aspect-[4/3] w-full overflow-hidden bg-gray-100">
+                  <div className="relative aspect-[3/2] w-full overflow-hidden bg-gray-100">
                     <img
                       src={item.imageUrl}
                       alt={`${item.brand} ${item.flavor}`}
-                      className="h-full w-full object-cover transition duration-700 hover:scale-105"
+                      className="h-full w-full object-cover"
                       loading="lazy"
                     />
                     <div className="absolute left-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-medium text-gray-800 shadow-sm">
                       {item.badge}
                     </div>
                   </div>
-                  <div className="flex flex-1 flex-col gap-2 px-3 py-3">
-                    <div className="text-[11px] text-gray-500">
+                  <div className="flex flex-1 flex-col gap-1.5 px-3 py-2">
+                    <div className="text-[10px] text-gray-500">
                       {item.brand} ・ {item.flavor}
                     </div>
-                    <h3 className="text-sm font-semibold text-gray-900">
+                    <h3 className="text-xs font-semibold text-gray-900 line-clamp-2">
                       {item.title}
                     </h3>
-                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                    <div className="mt-0.5 flex items-center gap-1 text-[10px]">
                       <span className="text-amber-500">
                         {"★".repeat(Math.round(item.rating)).padEnd(5, "☆")}
                       </span>
@@ -273,18 +419,18 @@ export default function Page() {
                         {item.rating.toFixed(1)} / 5.0
                       </span>
                     </div>
-                    <dl className="mt-1 grid grid-cols-2 gap-2 text-[11px] text-gray-600">
+                    <dl className="mt-1 grid grid-cols-2 gap-1 text-[10px] text-gray-600">
                       <div>
                         <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
                           カロリー
                         </dt>
-                        <dd className="mt-0.5 font-medium">{item.calories}</dd>
+                        <dd className="mt-0.5">{item.calories}</dd>
                       </div>
                       <div>
                         <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
                           1kgあたり
                         </dt>
-                        <dd className="mt-0.5 font-medium">
+                        <dd className="mt-0.5">
                           {item.pricePerKg}
                         </dd>
                       </div>
@@ -294,7 +440,6 @@ export default function Page() {
               </article>
             ))}
           </div>
-
           <div className="rounded-2xl border bg-gray-50/80 px-4 py-3 shadow-sm">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div className="space-y-1">
@@ -380,6 +525,135 @@ export default function Page() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-6">
+          <div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-gray-500">
+                  プロテイン一覧
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  収集した粉末プロテインの一部を表示しています。
+                </p>
+              </div>
+              <button
+                onClick={loadClassifiedProteins}
+                className="self-start rounded-full border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:border-gray-400 hover:bg-gray-50"
+              >
+                最新の情報を再読込
+              </button>
+            </div>
+            <div className="mt-3 rounded-2xl border bg-white/80 p-4 shadow-sm">
+              {classifiedMessage && (
+                <p className="mb-2 text-xs text-gray-400">{classifiedMessage}</p>
+              )}
+              {classified.length === 0 && !classifiedMessage && (
+                <p className="text-xs text-gray-400">
+                  まだ登録されているプロテインがありません。バッチ処理（`npm run daily:full`）実行後に反映されます。
+                </p>
+              )}
+              {classified.length > 0 && (
+                <ul className="divide-y divide-gray-100 text-xs">
+                  {classified.map((p) => (
+                    <li key={p.id}>
+                      <Link
+                        href={`/evaluations/${p.id}`}
+                        className="flex gap-3 py-3 hover:bg-gray-50 rounded-xl px-1 -mx-1 transition"
+                      >
+                        {p.product_image_url && (
+                          <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-md bg-gray-100">
+                            <img
+                              src={p.product_image_url}
+                              alt={p.product_name ?? "protein"}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                          </div>
+                        )}
+                        <div className="flex flex-1 flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+                          <div>
+                            <p className="text-[11px] font-semibold text-gray-900">
+                              {p.display_product_name ?? p.product_name ?? "名称不明"}
+                            </p>
+                            <p className="text-[11px] text-gray-500">
+                              {p.display_manufacturer ??
+                                p.manufacturer ??
+                                "メーカー不明"}
+                              {(p.display_flavor ?? p.flavor) &&
+                                ` ・ ${p.display_flavor ?? p.flavor}`}
+                            </p>
+                            {p.avg_rating != null && (
+                              <div className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-600">
+                                <span className="text-amber-500">
+                                  {"★"
+                                    .repeat(Math.round(p.avg_rating))
+                                    .padEnd(5, "☆")}
+                                </span>
+                                <span>{p.avg_rating.toFixed(1)} / 5.0</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-4 text-[10px] text-gray-600">
+                            {p.price_per_kg != null && (
+                              <span>
+                                <span className="font-semibold text-gray-800">
+                                  1kgあたり
+                                </span>
+                                : 約 ¥{Math.round(p.price_per_kg).toLocaleString()}
+                              </span>
+                            )}
+                            {p.price_per_kg == null && p.price_jpy != null && (
+                              <span>
+                                <span className="font-semibold text-gray-800">
+                                  価格（参考）
+                                </span>
+                                : ¥{p.price_jpy.toLocaleString()}
+                              </span>
+                            )}
+                            {p.protein_grams_per_serving != null && (
+                              <span>
+                                <span className="font-semibold text-gray-800">
+                                  1食あたりタンパク質
+                                </span>
+                                : {p.protein_grams_per_serving} g
+                              </span>
+                            )}
+                            {p.flavor_category && (
+                              <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5">
+                                <span className="text-[9px] text-gray-600">
+                                  {p.flavor_category === "choco"
+                                    ? "チョコ系"
+                                    : p.flavor_category === "coffee"
+                                    ? "コーヒー系"
+                                    : p.flavor_category === "fruit"
+                                    ? "フルーツ系"
+                                    : p.flavor_category === "milk"
+                                    ? "ミルク系"
+                                    : p.flavor_category === "sweets"
+                                    ? "お菓子系"
+                                    : p.flavor_category === "meal"
+                                    ? "食事系"
+                                    : p.flavor_category === "plain"
+                                    ? "プレーン"
+                                    : p.flavor_category === "yogurt"
+                                    ? "ヨーグルト系"
+                                    : p.flavor_category === "matcha"
+                                    ? "抹茶系"
+                                    : "その他"}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
         </section>
