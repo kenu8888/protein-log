@@ -84,6 +84,7 @@ export async function saveClassificationResult(
   let scrapedPriceValue: number | null = null;
   let scrapedPricePerKg: number | null = null;
 
+  // Amazon 由来: scraped_products を優先
   if (
     sourceRow?.source_name === "amazon" &&
     typeof sourceRow.source_key === "string" &&
@@ -97,7 +98,6 @@ export async function saveClassificationResult(
         .eq("asin", asin)
         .maybeSingle();
       if (spError) {
-        // 画像URLが取れなくても致命的ではないのでログだけ
         console.error(
           `saveClassificationResult: failed to fetch scraped_products row for asin=${asin}:`,
           spError
@@ -111,6 +111,39 @@ export async function saveClassificationResult(
         }
         if (typeof sp.price_per_kg === "number") {
           scrapedPricePerKg = sp.price_per_kg as number;
+        }
+      }
+    }
+  }
+
+  // メーカーサイト由来: manufacturer_products から数値価格・画像を補完
+  if (
+    sourceRow?.source_name === "manufacturer" &&
+    typeof sourceRow.source_key === "string" &&
+    sourceRow.source_key.startsWith("manufacturer:")
+  ) {
+    const upsertKey = (sourceRow.source_key as string).split(":")[1];
+    if (upsertKey) {
+      const { data: mp, error: mpError } = await client
+        .from("manufacturer_products")
+        .select("price_yen, price_per_kg, image_url")
+        .eq("upsert_key", upsertKey)
+        .maybeSingle();
+
+      if (mpError) {
+        console.error(
+          `saveClassificationResult: failed to fetch manufacturer_products row for upsert_key=${upsertKey}:`,
+          mpError
+        );
+      } else if (mp) {
+        if (typeof mp.price_yen === "number") {
+          scrapedPriceValue = scrapedPriceValue ?? (mp.price_yen as number);
+        }
+        if (typeof mp.price_per_kg === "number") {
+          scrapedPricePerKg = scrapedPricePerKg ?? (mp.price_per_kg as number);
+        }
+        if (mp.image_url && !productImageUrl) {
+          productImageUrl = mp.image_url as string;
         }
       }
     }

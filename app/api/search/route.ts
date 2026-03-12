@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     }
 
     const embeddingRes = await ai.models.embedContent({
-      model: "text-embedding-004",
+      model: "gemini-embedding-001",
       contents: query,
     });
 
@@ -28,11 +28,14 @@ export async function POST(request: Request) {
       );
     }
 
+    // pgvector 側のカラム定義（vector(768)）に合わせて先頭 768 次元だけを利用する
+    const queryEmbedding = embedding.values.slice(0, 768);
+
     // Call Postgres function to get nearest products
     const { data: matches, error: matchError } = await supabase.rpc(
       "match_products",
       {
-        query_embedding: embedding.values,
+        query_embedding: queryEmbedding,
         match_count: limit,
       }
     );

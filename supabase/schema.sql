@@ -91,6 +91,7 @@ create table if not exists manufacturer_products (
   price_text text,
   price_yen numeric,
   price_per_kg numeric,
+  image_url text,
   source_url text,
   first_seen_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now(),

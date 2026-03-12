@@ -68,7 +68,7 @@ async function backfillEmbeddings(batchSize = 100) {
   console.log(`Generating embeddings for ${rows.length} products (Gemini)...`);
 
   const embeddingResponse = await ai.models.embedContent({
-    model: "text-embedding-004",
+     model: "gemini-embedding-001",
     contents: texts,
   });
 
@@ -81,7 +81,9 @@ async function backfillEmbeddings(batchSize = 100) {
   // 既存行に対して search_embedding だけを UPDATE する（INSERT は行わない）
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const embedding = embeddingResponse.embeddings![i].values;
+    const full = embeddingResponse.embeddings![i].values;
+    // pgvector のカラム定義（vector(768)）に合わせて先頭 768 次元だけを利用する
+    const embedding = full.slice(0, 768);
 
     const { error: updateError } = await supabase
       .from("product_classification_results")

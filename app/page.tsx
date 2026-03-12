@@ -191,6 +191,7 @@ export default function Page() {
   const [classified, setClassified] = useState<ClassifiedProtein[]>([])
   const [classifiedMessage, setClassifiedMessage] = useState<string>("")
   const [proteinCount, setProteinCount] = useState<number | null>(null)
+  const [sortKey, setSortKey] = useState<"new" | "price" | "popular">("new")
 
   useEffect(() => {
     loadBrands()
@@ -297,13 +298,13 @@ export default function Page() {
 
     if (error) {
       console.error(error)
-      setClassifiedMessage("プロテイン一覧の取得でエラーが発生しました。")
+      setClassifiedMessage("プロテイン一覧の取得でエラーが発生しました")
       return
     }
 
     if (!data || data.length === 0) {
       setClassified([])
-      setClassifiedMessage("まだ登録されているプロテインがありません。")
+      setClassifiedMessage("まだ登録されているプロテインがありません")
       return
     }
 
@@ -380,6 +381,21 @@ export default function Page() {
     return true
   })
 
+  const sortedClassified = [...filteredClassified]
+  if (sortKey === "price") {
+    sortedClassified.sort((a, b) => {
+      const aPrice = a.price_per_kg ?? a.price_jpy ?? Number.POSITIVE_INFINITY
+      const bPrice = b.price_per_kg ?? b.price_jpy ?? Number.POSITIVE_INFINITY
+      return aPrice - bPrice
+    })
+  } else if (sortKey === "popular") {
+    sortedClassified.sort((a, b) => {
+      const aRating = a.avg_rating ?? -1
+      const bRating = b.avg_rating ?? -1
+      return bRating - aRating
+    })
+  }
+
   async function runVectorSearch() {
     const q = searchQuery.trim()
     if (!q) {
@@ -400,7 +416,7 @@ export default function Page() {
       })
 
       if (!res.ok) {
-        setClassifiedMessage("検索でエラーが発生しました。しばらくしてからお試しください。")
+        setClassifiedMessage("検索でエラーが発生しました しばらくしてからお試しください")
         return
       }
 
@@ -437,115 +453,134 @@ export default function Page() {
       )
 
       if (!products.length) {
-        setClassifiedMessage("該当するプロテインが見つかりませんでした。")
+        setClassifiedMessage("該当するプロテインが見つかりませんでした")
       } else {
         setClassifiedMessage("")
       }
     } catch (error) {
       console.error("runVectorSearch error", error)
-      setClassifiedMessage("検索でエラーが発生しました。")
+      setClassifiedMessage("検索でエラーが発生しました")
     }
   }
 
   return (
-    <div className="min-h-screen bg-white px-4 py-10 text-gray-900">
-      <main className="mx-auto flex max-w-5xl flex-col gap-12">
-        <header className="flex flex-col gap-5 border-b pb-6">
-          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-            <div>
-              <h1 className="text-3xl font-semibold tracking-tight">
-                プロテインログ
-              </h1>
-              <p className="mt-1 text-sm text-gray-600">
-                あなたに合うプロテインが見つかる。プロテイン専用データベース。
-              </p>
-            </div>
-            <div className="rounded-full border bg-gray-50 px-4 py-1 text-xs text-gray-600">
-              登録プロテイン数{" "}
-              <span className="font-semibold">
-                {proteinCount != null ? proteinCount.toLocaleString() : "―"}
-              </span>
-              件
-            </div>
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
+      {/* 1. フル幅ブランドバー */}
+      <header className="fixed inset-x-0 top-0 z-30 w-full bg-[#1F2A44] text-slate-50">
+        <div className="mx-auto flex h-12 max-w-5xl items-center justify-between px-4 sm:h-14">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold tracking-[0.22em]">
+              PROTEIN LOG
+            </span>
           </div>
-          {message && (
-            <div className="inline-flex max-w-full items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-              <span className="truncate">{message}</span>
+          {proteinCount != null && (
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[10px]">
+              <span className="text-slate-200">登録プロテイン</span>
+              <span className="text-xs font-semibold text-white">
+                {proteinCount.toLocaleString()}
+              </span>
+              <span className="text-slate-300">件</span>
             </div>
           )}
-        </header>
+        </div>
+      </header>
 
-        {/* 検索 + 絞り込み + 一覧 */}
-        <section className="space-y-5">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold text-emerald-700">
-              口コミから、自分に合うプロテインが見つかる
-            </p>
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-gray-500">
-                  プロテインを探す
-                </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  キーワード検索と絞り込みで、条件に合うプロテインを比較できます。
-                </p>
-              </div>
+      {/* 2. フル幅ヒーローセクション（PC/SPで別背景画像を使用） */}
+      {/* SP: hero-protein-mobile.png / PC: hero-protein-desktop.png */}
+      <section className="relative mt-12 w-full min-h-[240px] bg-[#F8FAFC] bg-right bg-no-repeat bg-[length:cover] bg-[url('/hero-protein-mobile.png')] sm:mt-14 sm:bg-[url('/hero-protein-desktop.png')]">
+        {/* テキスト可読性のためのオーバーレイ */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white/85 via-white/75 to-white/30" />
+
+        <div className="relative mx-auto flex h-full max-w-5xl flex-col gap-6 px-4 py-6 sm:flex-row sm:items-center sm:justify-between">
+          {/* 左: テキストエリア */}
+          <div className="max-w-xl space-y-4">
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-slate-500">
+                プロテイン比較・口コミデータベース
+              </p>
+              <h1 className="text-2xl font-semibold tracking-tight text-[#1F2A44] sm:text-3xl">
+                あなたに合うプロテインが見つかる
+              </h1>
+              <p className="text-xs leading-relaxed text-slate-600 sm:text-sm">
+                膨大にあるプロテイン情報を毎日更新し、
+                <br />
+                口コミとデータで比較できる「プロテイン専用のレビューサービス」です。
+              </p>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
               <button
-                onClick={loadClassifiedProteins}
-                className="mt-2 self-start rounded-full border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:border-gray-400 hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById("search")
+                  if (el) {
+                    el.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                }}
+                className="inline-flex items-center gap-1 rounded-[12px] bg-[#1F2A44] px-5 py-2 text-[11px] font-semibold text-white shadow-sm shadow-slate-900/10 hover:bg-[#111827]"
               >
-                最新の情報を再読込
+                プロテインを探す
               </button>
+              {proteinCount != null && (
+                <div className="inline-flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 text-[10px] text-slate-700 ring-1 ring-slate-200/80">
+                  <span className="text-slate-500">登録プロテイン</span>
+                  <span className="text-xs font-semibold text-slate-900">
+                    {proteinCount.toLocaleString()}
+                  </span>
+                  <span className="text-slate-400">件</span>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="space-y-4 rounded-2xl border bg-white/90 p-4 shadow-sm">
-            {/* 検索 */}
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-              <div className="flex-1">
-                <label className="text-[10px] font-semibold text-gray-600">
-                  キーワード検索
-                </label>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault()
-                      void runVectorSearch()
-                    }
-                  }}
-                  placeholder="メーカー名・商品名・フレーバーで検索（Enterで検索）"
-                  className="mt-1 w-full rounded-full border border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-900 placeholder:text-gray-400 focus:border-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-700"
-                />
-              </div>
-            </div>
+          {/* 右側はスペーサーとしてのみ利用（背景画像はセクションに敷いている） */}
+          <div className="mt-6 hidden flex-1 sm:block" />
+        </div>
+      </section>
 
+      <main className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-8">
+        {message && (
+          <div className="inline-flex max-w-full items-center gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-[10px] text-sky-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+            <span className="truncate">{message}</span>
+          </div>
+        )}
+
+        {/* 検索 + 絞り込み + 一覧 */}
+        <section id="search" className="space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-[#1F2A44]">
+              プロテインを探す
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              絞り込みとキーワード検索を組み合わせて、条件に合うプロテインを比較できます。
+            </p>
+          </div>
+
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             {/* 絞り込みバー */}
-            <div className="rounded-2xl border bg-gray-50/80 px-3 py-3">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-1 flex-col gap-1">
-                  <span className="text-[10px] font-semibold text-gray-600">
+                  <span className="text-[10px] font-semibold text-slate-700">
                     甘さ
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-500">控えめ</span>
+                    <span className="text-[10px] text-slate-500">控えめ</span>
                     <input
                       type="range"
                       min={0}
                       max={100}
                       value={sweetnessLevel}
                       onChange={(e) => setSweetnessLevel(Number(e.target.value))}
-                      className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-gray-200 accent-gray-800"
+                      className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-slate-200 accent-[#1F2A44]"
                     />
-                    <span className="text-[10px] text-gray-500">甘い</span>
+                    <span className="text-[10px] text-slate-500">甘い</span>
                   </div>
                 </div>
-                <div className="h-px w-full bg-gray-200 md:h-10 md:w-px" />
+                <div className="h-px w-full bg-slate-200 md:h-10 md:w-px" />
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-semibold text-gray-600">
+                  <span className="text-[10px] font-semibold text-slate-700">
                     味の傾向
                   </span>
                   <div className="flex flex-wrap gap-1.5">
@@ -562,8 +597,8 @@ export default function Page() {
                         }
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
                           selectedFlavorTypes.includes(option.label)
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-800"
-                            : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
+                            ? "border-[#1F2A44] bg-[#1F2A44] text-white"
+                            : "border-transparent bg-slate-100 text-slate-600 hover:bg-slate-200"
                         }`}
                       >
                         <span>{option.icon}</span>
@@ -572,9 +607,9 @@ export default function Page() {
                     ))}
                   </div>
                 </div>
-                <div className="h-px w-full bg-gray-200 md:h-10 md:w-px" />
+                <div className="h-px w-full bg-slate-200 md:h-10 md:w-px" />
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-semibold text-gray-600">
+                  <span className="text-[10px] font-semibold text-slate-700">
                     価格帯（1kgあたり）
                   </span>
                   <div className="flex flex-wrap gap-1.5">
@@ -591,8 +626,8 @@ export default function Page() {
                         }
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
                           selectedPriceTiers.includes(label)
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-800"
-                            : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
+                            ? "border-[#1F2A44] bg-[#1F2A44] text-white"
+                            : "border-transparent bg-slate-100 text-slate-600 hover:bg-slate-200"
                         }`}
                       >
                         <span>{label}</span>
@@ -602,26 +637,100 @@ export default function Page() {
                 </div>
               </div>
             </div>
+            {/* キーワード検索バー */}
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+              <div className="flex-1">
+                <label className="text-[10px] font-semibold text-slate-700">
+                  キーワード検索
+                </label>
+                <div className="mt-1 flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm">
+                  <span className="text-xs text-slate-400">🔍</span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        void runVectorSearch()
+                      }
+                    }}
+                    placeholder="メーカー名・商品名・フレーバーで検索（Enterで検索）"
+                    className="w-full flex-1 bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void runVectorSearch()}
+                    className="whitespace-nowrap rounded-[12px] bg-[#1F2A44] px-3 py-1 text-[11px] font-semibold text-white shadow-sm shadow-slate-900/10 hover:bg-[#111827]"
+                  >
+                    検索
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* 一覧表示 */}
-          <div className="rounded-2xl border bg-white/80 p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+
             {classifiedMessage && (
               <p className="mb-2 text-xs text-gray-400">{classifiedMessage}</p>
             )}
+
+            {classified.length > 0 && filteredClassified.length > 0 && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] text-slate-500">並び替え</p>
+                <div className="flex gap-1.5 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("new")}
+                    className={`rounded-full px-3 py-1 ${
+                      sortKey === "new"
+                        ? "bg-[#1F2A44] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    新着順
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("popular")}
+                    className={`rounded-full px-3 py-1 ${
+                      sortKey === "popular"
+                        ? "bg-[#1F2A44] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    人気順
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("price")}
+                    className={`rounded-full px-3 py-1 ${
+                      sortKey === "price"
+                        ? "bg-[#1F2A44] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    安い順
+                  </button>
+                </div>
+              </div>
+            )}
+
             {classified.length === 0 && !classifiedMessage && (
               <p className="text-xs text-gray-400">
-                まだ登録されているプロテインがありません。バッチ処理（`npm run daily:full`）実行後に反映されます。
+                まだ登録されているプロテインがありません バッチ処理（`npm run daily:full`）実行後に反映されます
               </p>
             )}
             {classified.length > 0 && filteredClassified.length === 0 && (
               <p className="text-xs text-gray-400">
-                条件に合うプロテインが見つかりませんでした。検索条件をゆるめてみてください。
+                条件に合うプロテインが見つかりませんでした 検索条件をゆるめてみてください
               </p>
             )}
-            {filteredClassified.length > 0 && (
+            {sortedClassified.length > 0 && (
               <ul className="divide-y divide-gray-100 text-xs">
-                {filteredClassified.map((p) => (
+                {sortedClassified.map((p) => (
                   <li key={p.id}>
                     <Link
                       href={`/evaluations/${p.id}`}
@@ -720,7 +829,7 @@ export default function Page() {
           </div>
 
           {/* サイトの特徴 */}
-          <div className="rounded-2xl border bg-gray-50/80 p-4 text-[11px] text-gray-700 space-y-1">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[11px] text-slate-700 shadow-sm space-y-1">
             <p>・忖度なしで全てのプロテイン情報をリサーチ</p>
             <p>・最新の各メーカープロテインフレーバー情報を毎日アップデート</p>
             <p>・口コミレビューからあなたに合うプロテインがきっと見つかる</p>
@@ -730,14 +839,14 @@ export default function Page() {
         <section className="grid gap-6 md:grid-cols-3">
           <div className="space-y-4">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-gray-500">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">
                 人気ブランド
               </h2>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-slate-500">
                 気になるブランドを選択してください。
               </p>
             </div>
-            <div className="rounded-2xl border bg-white/80 p-4 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <ul className="space-y-2">
                 {brands.map((b) => (
                   <li key={b.id}>
@@ -756,25 +865,64 @@ export default function Page() {
                 ))}
                 {brands.length === 0 && (
                   <li className="text-xs text-gray-400">
-                    ブランドがまだ登録されていません。
+                    ブランドがまだ登録されていません
                   </li>
                 )}
               </ul>
+            </div>
+
+            {/* キーワード検索バー */}
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+              <div className="flex-1">
+                <label className="text-[10px] font-semibold text-slate-700">
+                  キーワード検索
+                </label>
+                <div className="mt-1 flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm">
+                  <span className="text-xs text-slate-400">🔍</span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        void runVectorSearch()
+                      }
+                    }}
+                    placeholder="メーカー名・商品名・フレーバーで検索（Enterで検索）"
+                    className="w-full flex-1 bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void runVectorSearch()}
+                    className="whitespace-nowrap rounded-[12px] bg-[#1F2A44] px-3 py-1 text-[11px] font-semibold text-white shadow-sm shadow-slate-900/10 hover:bg-[#111827]"
+                  >
+                    検索
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={loadClassifiedProteins}
+                className="mt-1 self-start rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 hover:border-slate-300 hover:bg-slate-100"
+              >
+                最新の情報を再読込
+              </button>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-gray-500">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">
                 人気商品
               </h2>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-slate-500">
                 {selectedBrand
-                  ? `${selectedBrand} でよく飲まれている商品です。`
-                  : "ブランドを選ぶと商品が表示されます。"}
+                  ? `${selectedBrand} でよく飲まれている商品です`
+                  : "ブランドを選ぶと商品が表示されます"}
               </p>
             </div>
-            <div className="rounded-2xl border bg-white/80 p-4 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <ul className="space-y-2">
                 {products.map((p) => (
                   <li key={p.id}>
@@ -789,8 +937,8 @@ export default function Page() {
                 {products.length === 0 && (
                   <li className="text-xs text-gray-400">
                     {selectedBrand
-                      ? `${selectedBrand} の商品はまだ登録されていません。`
-                      : "まずブランドを選択してください。"}
+                      ? `${selectedBrand} の商品はまだ登録されていません`
+                      : "まずブランドを選択してください"}
                   </li>
                 )}
               </ul>
@@ -800,16 +948,16 @@ export default function Page() {
           <div className="space-y-6">
             <div className="space-y-4">
               <div>
-                <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-gray-500">
+                <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">
                   人気フレーバー
                 </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  {selectedProduct
-                    ? `${selectedProduct} で人気のフレーバーです。`
-                    : "商品を選ぶとフレーバーが表示されます。"}
+                <p className="mt-1 text-xs text-slate-500">
+                {selectedProduct
+                  ? `${selectedProduct} で人気のフレーバーです`
+                  : "商品を選ぶとフレーバーが表示されます"}
                 </p>
               </div>
-              <div className="rounded-2xl border bg-white/80 p-4 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <ul className="space-y-2">
                   {flavors.map((f) => (
                     <li key={f.id}>
@@ -824,8 +972,8 @@ export default function Page() {
                   {flavors.length === 0 && (
                     <li className="text-xs text-gray-400">
                       {selectedProduct
-                        ? `${selectedProduct} のフレーバーはまだ登録されていません。`
-                        : "まず商品を選択してください。"}
+                        ? `${selectedProduct} のフレーバーはまだ登録されていません`
+                        : "まず商品を選択してください"}
                     </li>
                   )}
                 </ul>
@@ -834,22 +982,22 @@ export default function Page() {
 
             <div className="space-y-3">
               <div>
-                <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-gray-500">
+                <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">
                   人気レビュー
                 </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  {selectedFlavor
-                    ? `${selectedFlavor} のレビューです。`
-                    : "フレーバーを選ぶとレビューが表示されます。"}
+                <p className="mt-1 text-xs text-slate-500">
+                {selectedFlavor
+                  ? `${selectedFlavor} のレビューです`
+                  : "フレーバーを選ぶとレビューが表示されます"}
                 </p>
               </div>
 
-              <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border bg-white/80 p-4 shadow-sm">
+              <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 {reviews.length === 0 && (
                   <p className="text-xs text-gray-400">
                     {selectedFlavor
-                      ? `${selectedFlavor} のレビューはまだ登録されていません。`
-                      : "フレーバーを選択すると、ここにレビューが表示されます。"}
+                      ? `${selectedFlavor} のレビューはまだ登録されていません`
+                      : "フレーバーを選択すると、ここにレビューが表示されます"}
                   </p>
                 )}
                 {reviews.map((r) => (
@@ -889,6 +1037,58 @@ export default function Page() {
           </div>
         </section>
       </main>
+
+      {/* フッター */}
+      <footer className="mt-10 border-t border-slate-200 bg-slate-50/80">
+        <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-8 text-[11px] text-slate-600 sm:flex-row sm:justify-between">
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <div className="text-xs font-semibold tracking-[0.18em] text-[#1F2A44]">
+                PROTEIN LOG
+              </div>
+              <p className="max-w-xs text-[11px] text-slate-500">
+                口コミとデータから、あなたに合う一杯を見つけるプロテイン比較・口コミサービスです。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3 text-[10px] text-slate-400">
+              <span>味・甘さ・溶けやすさ・コスパで比較</span>
+              <span>毎日自動更新</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 text-[11px] sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold text-slate-700">探す</p>
+              <div className="space-y-1 text-slate-500">
+                <Link href="#search" className="block hover:text-slate-800">
+                  プロテインを検索
+                </Link>
+                <span className="block text-slate-400">条件から探す（準備中）</span>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold text-slate-700">コンテンツ</p>
+              <div className="space-y-1 text-slate-500">
+                <span className="block text-slate-400">ブランド一覧（準備中）</span>
+                <span className="block text-slate-400">レビューガイド（準備中）</span>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold text-slate-700">運営情報</p>
+              <div className="space-y-1 text-slate-500">
+                <span className="block text-slate-400">利用規約（準備中）</span>
+                <span className="block text-slate-400">プライバシーポリシー（準備中）</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="border-t border-slate-200 bg-slate-50/90">
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 text-[10px] text-slate-400">
+            <span>© {new Date().getFullYear()} Protein Log.</span>
+            <span>All rights reserved.</span>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
