@@ -35,6 +35,15 @@ type SerpApiAmazonResponse = {
   }>
 }
 
+function parsePriceValueFromRaw(raw: string | undefined | null): number | null {
+  if (!raw) return null
+  // 例: "￥3,980", "¥3,980", "3,980円" などから数字だけを抜き出して数値化
+  const digits = raw.replace(/[^\d]/g, "")
+  if (!digits) return null
+  const v = Number(digits)
+  return Number.isFinite(v) ? v : null
+}
+
 export async function POST() {
   const apiKey = process.env.SERPAPI_API_KEY
   if (!apiKey) {
@@ -83,8 +92,11 @@ export async function POST() {
     for (const item of organic) {
       if (!item.asin || !item.title || !item.link) continue
       const priceRaw = item.price?.raw ?? ""
-      const priceValue =
+      let priceValue =
         typeof item.price?.value === "number" ? item.price.value : null
+      if (priceValue == null) {
+        priceValue = parsePriceValueFromRaw(priceRaw)
+      }
 
       products.push({
         asin: item.asin,
@@ -108,8 +120,11 @@ export async function POST() {
         if (products.find((p) => p.asin === item.asin)) continue
 
         const priceRaw = item.price?.raw ?? ""
-        const priceValue =
+        let priceValue =
           typeof item.price?.value === "number" ? item.price.value : null
+        if (priceValue == null) {
+          priceValue = parsePriceValueFromRaw(priceRaw)
+        }
 
         products.push({
           asin: item.asin,

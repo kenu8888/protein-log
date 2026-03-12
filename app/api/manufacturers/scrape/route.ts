@@ -6,6 +6,7 @@ type ManufacturerSource = {
   id: string
   manufacturer_name: string
   url: string
+  manufacturer_code: string | null
 }
 
 function buildUpsertKey(p: {
@@ -24,6 +25,7 @@ function buildUpsertKey(p: {
 
 type ParsedProduct = {
   manufacturer_name: string
+  manufacturer_code?: string | null
   product_name: string
   flavor: string | null
   unit_text: string | null
@@ -33,6 +35,11 @@ type ParsedProduct = {
   price_per_kg: number | null
   image_url: string | null
   source_url: string
+  // 元ページから取得した生のテキスト（再パースやパーサー改善用）
+  raw_product_name?: string | null
+  raw_flavor?: string | null
+  raw_unit_text?: string | null
+  raw_price_text?: string | null
 }
 
 const MIN_DELAY_MS = 1500
@@ -187,7 +194,8 @@ function extractFlavorFromText(text: string): string | null {
 function parseManufacturerPage(
   html: string,
   baseUrl: string,
-  manufacturerName: string
+  manufacturerName: string,
+  manufacturerCode: string | null
 ): ParsedProduct[] {
   const $ = load(html)
   const candidates: ParsedProduct[] = []
@@ -281,6 +289,7 @@ function parseManufacturerPage(
 
     candidates.push({
       manufacturer_name: manufacturerName,
+      manufacturer_code: manufacturerCode,
       product_name,
       flavor,
       unit_text: unitInfo.unit_text,
@@ -289,7 +298,11 @@ function parseManufacturerPage(
       price_yen: priceInfo.price_yen,
       price_per_kg,
       image_url,
-      source_url
+      source_url,
+      raw_product_name: product_name,
+      raw_flavor: flavor,
+      raw_unit_text: unitInfo.unit_text,
+      raw_price_text: priceInfo.price_text
     })
   })
 
@@ -302,10 +315,125 @@ function parseManufacturerPage(
   return Array.from(unique.values()).slice(0, 200)
 }
 
+// MyProtein 専用パーサー
+// - manufacturer_sources.manufacturer_code = 'myprotein' を想定
+// - 商品詳細ページ構造（product-title / Amount ボタン / product-price / gallery-image）に対応
+function parseMyproteinPage(html: string, src: ManufacturerSource): ParsedProduct[] {
+  const $ = load(html)
+  const candidates: ParsedProduct[] = []
+
+  // 商品詳細ページ: #product-title がある前提
+  const productTitle = $("#product-title")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (!productTitle) {
+    return []
+  }
+
+  const raw_product_name = productTitle
+
+  // フレーバー:
+  // 1. フレーバー用セレクトボックスで selected な option のテキスト
+  // 2. なければ商品名テキストからキーワード抽出
+  const selectedFlavorOption = $("select.elements-variations-dropdown option[selected]")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+  const flavorFromSelect = selectedFlavorOption || null
+  const flavorFromText = extractFlavorFromText(raw_product_name)
+  const flavor = flavorFromSelect || flavorFromText || null
+
+  // 容量: Amount バリエーションボタンのうち aria-checked="true" のもの
+  const amountBtn = $('button[data-option="Amount"][aria-checked="true"]').first()
+  const amountText =
+    amountBtn.find(".elements-variations-button-content").first().text().trim() ||
+    amountBtn.attr("data-key") ||
+    ""
+
+  const unitSourceText = amountText || ""
+  const unitInfo = parseUnit(unitSourceText)
+
+  // 価格:
+  // 1. PC 向け: #product-price 内の .price / .price-per
+  // 2. SP 向け: #product-price-secondary 内の .price
+  // 3. サブスクリプションタブの #onetime-price
+  const priceBlock = $("#product-price")
+  const priceMainText = priceBlock
+    .find(".price")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+  const pricePerText = priceBlock
+    .find(".price-per")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const priceSecondaryBlock = $("#product-price-secondary")
+  const priceSecondaryText = priceSecondaryBlock
+    .find(".price")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const oneTimePriceText = $("#onetime-price")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const priceSourceText =
+    priceMainText || pricePerText || priceSecondaryText || oneTimePriceText || ""
+  const priceInfo = parsePrice(priceSourceText)
+
+  // 画像: ギャラリー画像（class="gallery-image"）を優先
+  let image_url: string | null = null
+  const imgSrcAttr = $("img.gallery-image").first().attr("src")
+  if (imgSrcAttr) {
+    try {
+      image_url = new URL(imgSrcAttr, src.url).toString()
+    } catch {
+      image_url = imgSrcAttr
+    }
+  }
+
+  const price_per_kg =
+    priceInfo.price_yen && unitInfo.unit_kg
+      ? Math.round((priceInfo.price_yen / unitInfo.unit_kg) * 10) / 10
+      : null
+
+  candidates.push({
+    manufacturer_name: src.manufacturer_name,
+    manufacturer_code: src.manufacturer_code,
+    product_name: raw_product_name,
+    flavor,
+    unit_text: unitInfo.unit_text,
+    unit_kg: unitInfo.unit_kg,
+    price_text: priceInfo.price_text,
+    price_yen: priceInfo.price_yen,
+    price_per_kg,
+    image_url,
+    source_url: src.url,
+    raw_product_name,
+    raw_flavor: flavorFromText ?? null,
+    raw_unit_text: unitSourceText || null,
+    raw_price_text: priceSourceText || null
+  })
+
+  return candidates
+}
+
 export async function POST() {
   const { data: sources, error } = await supabase
     .from("manufacturer_sources")
-    .select("id, manufacturer_name, url")
+    .select("id, manufacturer_name, url, manufacturer_code")
 
   if (error) {
     console.error(error)
@@ -339,7 +467,19 @@ export async function POST() {
       }
 
       const html = await res.text()
-      const parsed = parseManufacturerPage(html, src.url, src.manufacturer_name)
+      const code = (src.manufacturer_code ?? "").toLowerCase()
+      let parsed: ParsedProduct[] = []
+
+      if (code === "myprotein") {
+        parsed = parseMyproteinPage(html, src)
+      } else {
+        parsed = parseManufacturerPage(
+          html,
+          src.url,
+          src.manufacturer_name,
+          src.manufacturer_code
+        )
+      }
 
       if (parsed.length > 0) {
         allParsed.push(...parsed)
@@ -365,13 +505,35 @@ export async function POST() {
   await enrichImagesFromDetailPages(allParsed)
 
   const rows = allParsed.map((p) => ({
-    ...p,
+    // 生テキストは専用カラムにも保存しておく
+    manufacturer_name: p.manufacturer_name,
+    manufacturer_code: p.manufacturer_code ?? null,
+    product_name: p.product_name,
+    flavor: p.flavor,
+    unit_text: p.unit_text,
+    unit_kg: p.unit_kg,
+    price_text: p.price_text,
+    price_yen: p.price_yen,
+    price_per_kg: p.price_per_kg,
+    image_url: p.image_url,
+    source_url: p.source_url,
+    raw_product_name: p.raw_product_name ?? p.product_name,
+    raw_flavor: p.raw_flavor ?? p.flavor,
+    raw_unit_text: p.raw_unit_text ?? p.unit_text,
+    raw_price_text: p.raw_price_text ?? p.price_text,
     upsert_key: buildUpsertKey(p)
   }))
 
+  // 同一 upsert_key が複数回含まれていると
+  // 「ON CONFLICT DO UPDATE command cannot affect row a second time」になるため
+  // ここで事前に upsert_key ごとに 1 レコードにまとめる
+  const uniqueRows = Array.from(
+    new Map(rows.map((r) => [r.upsert_key, r])).values()
+  )
+
   const { error: upsertError } = await supabase
     .from("manufacturer_products")
-    .upsert(rows, { onConflict: "upsert_key" })
+    .upsert(uniqueRows, { onConflict: "upsert_key" })
 
   if (upsertError) {
     console.error(upsertError)
@@ -422,9 +584,9 @@ export async function POST() {
     {
       message:
         "メーカーサイトからの商品情報を保存しました。同一キーは価格など上書き、新規は first_seen_at で判別できます。",
-      total_products: rows.length,
+          total_products: uniqueRows.length,
       manufacturers: Array.from(
-        new Set(rows.map((p) => p.manufacturer_name))
+        new Set(uniqueRows.map((p) => p.manufacturer_name))
       ).length
     },
     { status: 200 }

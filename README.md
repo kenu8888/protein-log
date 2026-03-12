@@ -20,25 +20,31 @@
 ### Webアプリ
 - Next.js + Supabase 接続済み
 - トップページ
-  - 最上部にフル幅のブランドバー（`PROTEIN LOG` と登録プロテイン件数、スクロール追従）
+  - 最上部にフル幅のブランドバー（`PROTEIN LOG` とロゴ横のキーワード検索バー、スクロール追従）
   - その下にヒーローセクション
     - PC / SP で出し分けたプロテイン袋の背景画像
     - 小ラベル「プロテイン比較・口コミデータベース」
     - 見出し「あなたに合うプロテインが見つかる」
     - 説明「膨大にあるプロテイン情報を毎日更新し、口コミとデータで比較できるプロテイン専用のレビューサービスです」
     - CTA ボタン「プロテインを探す」
+    - サマリー表示
+      - 登録フレーバー数（`product_classification_results` の `is_protein_powder = true` 件数）
+      - 登録メーカー数（`manufacturer_sources` の件数）
+      - 最終更新日時（最新の `product_classification_results.created_at` を日付＋時刻で表示）
   - 「プロテインを探す」セクション
     - 絞り込みバー
       - 甘さスライダー
-      - 味の傾向チップ（コーヒー系 / チョコ系 / フルーツ系 / ミルク系 / お菓子系 / 食事系 / プレーン / ヨーグルト / 抹茶）
-      - 価格帯チップ（低価格帯 / 中価格帯 / 高価格帯）
-    - キーワード検索バー（メーカー名 / 商品名 / フレーバーでベクトル検索）
-    - プロテイン一覧（`product_classification_results` の最新 30 件）
+      - フレーバーチップ（コーヒー系 / チョコ系 / フルーツ系 / ミルク系 / お菓子系 / 食事系 / プレーン / ヨーグルト / 抹茶）
+      - 好みの傾向チップ（甘さ / 味の濃さ / ミルク感 / 人工甘味料感）※将来的に評価データと連動予定
+    - キーワード検索バー（ロゴバーおよびフィルタカード内からベクトル検索を実行）
+    - プロテイン一覧（`product_classification_results` の `is_protein_powder = true` 全件をクライアントサイドでページング表示）
       - メーカー / 商品名 / フレーバー（`display_*` を優先）
-      - 1kg あたりの参考価格（`price_per_kg` 優先）
-      - 平均評価 (`avg_rating`) の星表示
+      - 1kg あたりの参考価格（`price_per_kg` 優先、なければ `price_jpy`）
+      - 平均評価 (`avg_rating`) の星表示（未評価はグレーの ☆☆☆☆☆）
       - フレーバーカテゴリバッジ
+      - 在庫切れ表示（Amazon 由来で `is_in_stock = false` の場合は価格欄に「在庫切れ」と表示）
       - 一覧上部にソートボタン（新着順 / 人気順 / 安い順）
+      - 10 件 / ページのページング（前へ / 次へ）と、切り替え時の軽いフェードインアニメーション
 - プロテイン詳細ページ（`/evaluations/[id]`）
   - 商品画像（Amazon / メーカーの画像 URL を利用して表示）
   - 価格情報（1kg あたりの参考価格と総額）
@@ -57,11 +63,15 @@
 - Vertex AI ローカル疎通・Gemini 2.5 Flash-Lite での JSON 抽出確認済み
 - ルールベース除外処理（BCAA・プロテインバーなどを事前に除外）
 - `protein_source_texts` / `product_classification_results` テーブルと DB 連携バッチ実装済み
-- Amazon（SerpAPI 経由）/ メーカーサイトからのスクレイピング結果を取り込み、AI で「粉末プロテインか」「どのようなプロテインか」を分類するパイプライン実装済み
-- 価格まわり
-  - `scraped_products.price_value`（SerpAPI の数値価格）と、タイトルから推定した `net_weight_kg` をもとに `price_per_kg` を計算
-  - `product_classification_results` には、LLM の推定値ではなく **スクレイピングした数値価格を優先して** `price_jpy` / `price_per_kg` を保存
-  - これにより 1kg あたり価格の精度とカバレッジを向上
+- Amazon（SerpAPI 経由）/ メーカーサイト / iHerb からのスクレイピング結果を取り込み、AI で「粉末プロテインか」「どのようなプロテインか」を分類するパイプライン実装済み
+- 価格・在庫まわり
+  - Amazon:
+    - 検索一覧 (`engine=amazon`) で ASIN 候補を取得し、`scraped_products` に保存
+    - 詳細 API (`engine=amazon_product`) で ASIN ごとの価格・在庫テキストを取得し、`scraped_products.price` / `price_value` / `availability_raw` / `is_available` を補完
+    - タイトルから推定した `net_weight_kg` と `price_value` から `price_per_kg` を計算（`batch:backfill-amazon-prices`）
+  - メーカーサイト:
+    - `manufacturer_products.price_yen` / `price_per_kg` / `image_url` を正とし、AI結果より優先して `product_classification_results` にマージ
+  - `product_classification_results` には、LLM の推定値ではなく **スクレイピングした数値価格を優先して** `price_jpy` / `price_per_kg` を保存し、Amazon の在庫有無は `is_in_stock` フラグとして保持
 
 ## バッチ実行（取り込み + 分類）
 
@@ -87,8 +97,8 @@ npm run batch:classify
 # まとめて実行（取り込み → 分類）
 npm run batch:import-and-classify
 
-# 1日分すべて
-# Amazon / メーカーのスクレイプ → 価格・重量の補完 → 取り込み → 分類
+# iHerb も含めた 1日分すべて
+# Amazon / メーカー / iHerb のスクレイプ → Amazon 詳細取得 → 価格・重量の補完 → 取り込み → 分類
 npm run daily:full
 ```
 

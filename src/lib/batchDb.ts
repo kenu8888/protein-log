@@ -83,6 +83,7 @@ export async function saveClassificationResult(
   let productImageUrl: string | null = null;
   let scrapedPriceValue: number | null = null;
   let scrapedPricePerKg: number | null = null;
+  let isInStock: boolean | null = null;
 
   // Amazon 由来: scraped_products を優先
   if (
@@ -94,7 +95,7 @@ export async function saveClassificationResult(
     if (asin) {
       const { data: sp, error: spError } = await client
         .from("scraped_products")
-        .select("image_url, price_value, net_weight_kg, price_per_kg")
+        .select("image_url, price_value, net_weight_kg, price_per_kg, is_available")
         .eq("asin", asin)
         .maybeSingle();
       if (spError) {
@@ -111,6 +112,9 @@ export async function saveClassificationResult(
         }
         if (typeof sp.price_per_kg === "number") {
           scrapedPricePerKg = sp.price_per_kg as number;
+        }
+        if (typeof sp.is_available === "boolean") {
+          isInStock = sp.is_available as boolean;
         }
       }
     }
@@ -180,6 +184,7 @@ export async function saveClassificationResult(
     confidence: result.confidence,
     product_url: sourceRow?.source_url ?? null,
     product_image_url: productImageUrl,
+    is_in_stock: isInStock,
   };
 
   const { error } = await client

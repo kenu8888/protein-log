@@ -1,10 +1,32 @@
+// バッチ実行時にも .env / .env.local を読めるようにする
+// Next.js のブラウザ側では require が無視されるので問題なし
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require("dotenv").config({ path: ".env.local" });
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require("dotenv").config();
+} catch {
+  // dotenv が無い環境（本番Nextなど）ではそのまま process.env を使う
+}
+
 import { GoogleGenAI } from "@google/genai";
 
-const googleApiKey = process.env.GOOGLE_API_KEY;
-// 明示的に API キーを渡して、ADC 経由のスコープ不足を避ける
-export const ai = new GoogleGenAI(
-  googleApiKey ? { apiKey: googleApiKey } : {}
-);
+// Generative Language API（Google AI Studio）のキーを専用で使う
+// - GENAI_API_KEY または GOOGLE_GENAI_API_KEY を優先
+// - 既存互換として最後に GOOGLE_API_KEY も見る
+const genaiApiKey =
+  process.env.GENAI_API_KEY ??
+  process.env.GOOGLE_GENAI_API_KEY ??
+  process.env.GOOGLE_API_KEY;
+
+if (!genaiApiKey) {
+  // ランタイムですぐ気付けるようにする
+  throw new Error(
+    "Missing GenAI API key: set GENAI_API_KEY or GOOGLE_GENAI_API_KEY (or GOOGLE_API_KEY as fallback)"
+  );
+}
+
+export const ai = new GoogleGenAI({ apiKey: genaiApiKey });
 
 export async function askGeminiText(prompt: string) {
   const response = await ai.models.generateContent({

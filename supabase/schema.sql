@@ -51,6 +51,9 @@ create table if not exists scraped_products (
   image_url text,
   price text,
   price_value numeric,
+  -- Amazon 在庫情報（生テキスト / 正規化した在庫フラグ）
+  availability_raw text,
+  is_available boolean,
   net_weight_kg numeric,
   price_per_kg numeric,
   rating numeric,
@@ -167,6 +170,8 @@ create table if not exists product_classification_results (
   confidence numeric,
   product_url text,
   product_image_url text,
+  -- 在庫情報（現状は主に Amazon 由来）
+  is_in_stock boolean,
   created_at timestamp with time zone default now(),
   unique (source_text_id)
 );
