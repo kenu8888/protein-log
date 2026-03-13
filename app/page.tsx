@@ -175,6 +175,7 @@ export default function Page() {
   const [sweetnessLevel, setSweetnessLevel] = useState<number>(50)
   const [selectedFlavorTypes, setSelectedFlavorTypes] = useState<string[]>([])
   const [selectedPreferences, setSelectedPreferences] = useState<string[]>([])
+  const [selectedSources, setSelectedSources] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState<string>("")
 
   const [classified, setClassified] = useState<ClassifiedProtein[]>([])
@@ -182,7 +183,9 @@ export default function Page() {
   const [proteinCount, setProteinCount] = useState<number | null>(null)
   const [manufacturerCount, setManufacturerCount] = useState<number | null>(null)
   const [lastUpdatedLabel, setLastUpdatedLabel] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<"new" | "price" | "popular">("new")
+  const [sortKey, setSortKey] = useState<
+    "new" | "price" | "price_desc" | "popular" | "reviews"
+  >("new")
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [listAnimating, setListAnimating] = useState<boolean>(false)
 
@@ -394,11 +397,32 @@ export default function Page() {
   }
 
   const filteredClassified = classified.filter((p) => {
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      const text = [
+        p.display_manufacturer ?? p.manufacturer ?? "",
+        p.display_product_name ?? p.product_name ?? "",
+        p.display_flavor ?? p.flavor ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+      if (!text.includes(q)) {
+        return false
+      }
+    }
+
     if (selectedFlavorTypes.length > 0) {
       const matchedFlavor = flavorTypeOptions.find(
         (f) => f.value === p.flavor_category
       )
       if (!matchedFlavor || !selectedFlavorTypes.includes(matchedFlavor.label)) {
+        return false
+      }
+    }
+
+    if (selectedSources.length > 0) {
+      const sources = p.source_names ?? []
+      if (!sources.some((s) => selectedSources.includes(s))) {
         return false
       }
     }
@@ -439,74 +463,7 @@ export default function Page() {
       setListAnimating(false)
     })
     return () => cancelAnimationFrame(id)
-  }, [classified, selectedFlavorTypes, selectedPreferences, sortKey, safePage])
-
-  async function runVectorSearch() {
-    const q = searchQuery.trim()
-    if (!q) {
-      // クエリが空なら通常の一覧に戻す
-      await loadClassifiedProteins()
-      return
-    }
-
-    setClassifiedMessage("検索中です…")
-
-    try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ query: q, limit: 30 })
-      })
-
-      if (!res.ok) {
-        setClassifiedMessage("検索でエラーが発生しました しばらくしてからお試しください")
-        return
-      }
-
-      const json = await res.json()
-      const products = (json.products ?? []) as any[]
-
-      setClassified(
-        products.map((row: any) => ({
-          id: row.id as string,
-          manufacturer: (row.manufacturer as string) ?? null,
-          product_name: (row.product_name as string) ?? null,
-          flavor: (row.flavor as string) ?? null,
-          price_jpy:
-            typeof row.price_jpy === "number" ? (row.price_jpy as number) : null,
-          protein_grams_per_serving:
-            typeof row.protein_grams_per_serving === "number"
-              ? (row.protein_grams_per_serving as number)
-              : null,
-          avg_rating:
-            typeof row.avg_rating === "number" ? (row.avg_rating as number) : null,
-          price_per_kg:
-            typeof row.price_per_kg === "number"
-              ? (row.price_per_kg as number)
-              : null,
-          flavor_category: (row.flavor_category as string) ?? null,
-          display_manufacturer: (row.display_manufacturer as string) ?? null,
-          display_product_name: (row.display_product_name as string) ?? null,
-          display_flavor: (row.display_flavor as string) ?? null,
-          product_url: (row.product_url as string) ?? null,
-          product_image_url: (row.product_image_url as string) ?? null,
-          confidence:
-            typeof row.confidence === "number" ? (row.confidence as number) : null
-        }))
-      )
-
-      if (!products.length) {
-        setClassifiedMessage("該当するプロテインが見つかりませんでした")
-      } else {
-        setClassifiedMessage("")
-      }
-    } catch (error) {
-      console.error("runVectorSearch error", error)
-      setClassifiedMessage("検索でエラーが発生しました")
-    }
-  }
+  }, [classified, selectedFlavorTypes, selectedPreferences, selectedSources, sortKey, safePage, searchQuery])
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
@@ -525,19 +482,18 @@ export default function Page() {
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault()
-                      void runVectorSearch()
-                    }
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    setCurrentPage(1)
                   }}
                   placeholder="メーカー名・商品名・フレーバー検索"
                 className="w-full flex-1 bg-transparent text-[10px] text-slate-50 placeholder:text-slate-300 focus:outline-none"
                 />
                 <button
                   type="button"
-                  onClick={() => void runVectorSearch()}
+                  onClick={() => {
+                    setCurrentPage(1)
+                  }}
                   className="whitespace-nowrap rounded-full bg-white/90 px-3 py-0.5 text-[10px] font-semibold text-[#1F2A44] hover:bg-white"
                 >
                   検索
@@ -716,6 +672,26 @@ export default function Page() {
                 </div>
               </div>
             </div>
+            {/* 検索条件クリア */}
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSweetnessLevel(50)
+                  setSelectedFlavorTypes([])
+                  setSelectedPreferences([])
+                  setSelectedSources([])
+                  setSearchQuery("")
+                  setSortKey("new")
+                  setCurrentPage(1)
+                  setClassifiedMessage("")
+                  void loadClassifiedProteins()
+                }}
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] text-slate-700 hover:border-slate-300 hover:bg-slate-100"
+              >
+                検索条件をクリア
+              </button>
+            </div>
             {/* （キーワード検索バーはヘッダー内に移動） */}
           </div>
 
@@ -735,7 +711,7 @@ export default function Page() {
             {classified.length > 0 && filteredClassified.length > 0 && (
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[11px] text-slate-500">並び替え</p>
-                <div className="flex gap-1.5 text-[10px]">
+                <div className="flex flex-wrap gap-1.5 text-[10px]">
                   <button
                     type="button"
                     onClick={() => setSortKey("new")}
@@ -768,6 +744,28 @@ export default function Page() {
                     }`}
                   >
                     安い順
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("price_desc")}
+                    className={`rounded-full px-3 py-1 ${
+                      sortKey === "price_desc"
+                        ? "bg-[#1F2A44] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    高い順
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortKey("reviews")}
+                    className={`rounded-full px-3 py-1 ${
+                      sortKey === "reviews"
+                        ? "bg-[#1F2A44] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    口コミ件数順
                   </button>
                 </div>
               </div>
@@ -834,25 +832,8 @@ export default function Page() {
                               </div>
                             )}
                           </div>
-                          <div className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-700">
-                            {p.avg_rating != null ? (
-                              <>
-                                <span className="text-amber-500 text-[11px]">
-                                  {"★"
-                                    .repeat(Math.round(p.avg_rating))
-                                    .padEnd(5, "☆")}
-                                </span>
-                                <span className="font-medium">
-                                  {p.avg_rating.toFixed(1)} / 5.0
-                                </span>
-                                <span className="text-gray-400">総合評価</span>
-                              </>
-                            ) : (
-                              <span className="text-gray-300 text-[11px]">
-                                ☆☆☆☆☆
-                              </span>
-                            )}
-                          </div>
+                          {/* トップ一覧では Amazon 由来の星評価は表示しない（将来のサイト内レビューのみ用） */}
+                          {/* ここでは一律で星表示をオフにする */}
                         </div>
 
                         {/* 右: 価格とフレーバーカテゴリ（PCでは横並び） */}

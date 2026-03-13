@@ -22,6 +22,8 @@ export const ProteinResultSchema = z.object({
   fat: z.number().nullable(),
   avg_rating: z.number().nullable(),
   price_per_kg: z.number().nullable(),
+  // 20g のタンパク質あたりのおおよその価格（円）
+  price_per_20g_protein: z.number().nullable(),
   flavor_category: z
     .enum([
       "choco",
@@ -40,7 +42,16 @@ export const ProteinResultSchema = z.object({
   display_product_name: z.string().nullable(),
   display_flavor: z.string().nullable(),
   protein_type: z
-    .enum(["whey", "casein", "soy", "pea", "egg", "mixed", "unknown"])
+    .enum([
+      "whey_wpc", // ホエイ（WPC）
+      "whey_wpi", // ホエイ（WPI）
+      "casein",
+      "soy",
+      "egg",
+      "beef",
+      "mixed",
+      "unknown",
+    ])
     .nullable(),
   confidence: z.number().min(0).max(1).nullable(),
 });

@@ -14,6 +14,7 @@
     "batch:backfill-embeddings": "tsx src/batch/backfill-embeddings.ts",
     "batch:fetch-amazon-details": "tsx src/batch/fetch-amazon-product-details.ts",
     "batch:scrape-iherb": "tsx src/batch/scrape-iherb.ts",
+    "batch:enrich-myprotein-nutrition": "tsx src/batch/enrich-myprotein-nutrition.ts",
     "daily:scrape": "curl -X POST http://localhost:3000/api/scrape-protein && curl -X POST http://localhost:3000/api/manufacturers/scrape",
     "daily:full": "npm run daily:scrape && npm run batch:scrape-iherb && npm run batch:fetch-amazon-details && npm run batch:backfill-amazon-prices && npm run batch:import-and-classify"
   },

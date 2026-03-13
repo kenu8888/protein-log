@@ -162,11 +162,15 @@ create table if not exists product_classification_results (
   fat numeric,
   avg_rating numeric,
   price_per_kg numeric,
+  -- タンパク質20gあたりのおおよその価格（円）
+  price_per_20g_protein numeric,
   flavor_category text,
   display_manufacturer text,
   display_product_name text,
   display_flavor text,
-  protein_type text check (protein_type in ('whey', 'casein', 'soy', 'pea', 'egg', 'mixed', 'unknown')),
+  -- プロテインの種類（詳細カテゴリ）
+  -- 'whey_wpc' = ホエイ（WPC）, 'whey_wpi' = ホエイ（WPI）
+  protein_type text check (protein_type in ('whey_wpc', 'whey_wpi', 'casein', 'soy', 'egg', 'beef', 'mixed', 'unknown')),
   confidence numeric,
   product_url text,
   product_image_url text,

@@ -176,6 +176,7 @@ export async function saveClassificationResult(
     avg_rating: result.avg_rating,
     // 優先度: Amazon/メーカー由来の price_per_kg > LLM の推測値
     price_per_kg: scrapedPricePerKg ?? result.price_per_kg,
+    price_per_20g_protein: result.price_per_20g_protein ?? null,
     flavor_category: result.flavor_category,
     display_manufacturer: result.display_manufacturer,
     display_product_name: result.display_product_name,

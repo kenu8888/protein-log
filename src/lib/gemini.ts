@@ -94,6 +94,8 @@ ${inputText}
           fat: { type: Type.NUMBER, nullable: true },
           avg_rating: { type: Type.NUMBER, nullable: true },
           price_per_kg: { type: Type.NUMBER, nullable: true },
+          price_per_20g_protein: { type: Type.NUMBER, nullable: true },
+          price_per_20g_protein: { type: Type.NUMBER, nullable: true },
           flavor_category: {
             type: Type.STRING,
             nullable: true,
@@ -116,7 +118,16 @@ ${inputText}
           protein_type: {
             type: Type.STRING,
             nullable: true,
-            enum: ["whey", "casein", "soy", "pea", "egg", "mixed", "unknown"],
+            enum: [
+              "whey_wpc",
+              "whey_wpi",
+              "casein",
+              "soy",
+              "egg",
+              "beef",
+              "mixed",
+              "unknown",
+            ],
           },
           confidence: { type: Type.NUMBER, nullable: true },
         },

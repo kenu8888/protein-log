@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     const { data: rows, error: rowsError } = await supabase
       .from("product_classification_results")
       .select(
-        "id, manufacturer, product_name, flavor, price_jpy, protein_grams_per_serving, avg_rating, price_per_kg, flavor_category, display_manufacturer, display_product_name, display_flavor, product_url, product_image_url, confidence, is_protein_powder"
+        "id, manufacturer, product_name, flavor, price_jpy, protein_grams_per_serving, avg_rating, price_per_kg, flavor_category, display_manufacturer, display_product_name, display_flavor, product_url, product_image_url, confidence, is_protein_powder, source_text_id"
       )
       .in("id", ids);
 
@@ -69,16 +69,54 @@ export async function POST(request: Request) {
       );
     }
 
+    // source_text_id から source_name を解決してラベル化
+    const sourceIds = Array.from(
+      new Set(
+        (rows ?? [])
+          .map((r: any) => r.source_text_id as string | null)
+          .filter((id): id is string => !!id)
+      )
+    );
+
+    let sourceMap = new Map<string, string>();
+    if (sourceIds.length > 0) {
+      const { data: srcRows } = await supabase
+        .from("protein_source_texts")
+        .select("id, source_name")
+        .in("id", sourceIds);
+
+      if (srcRows) {
+        for (const r of srcRows as any[]) {
+          const raw = (r.source_name as string | null) ?? "";
+          const lower = raw.toLowerCase();
+          let label: string | null = null;
+          if (lower.includes("amazon")) label = "Amazon";
+          else if (lower.includes("manufacturer")) label = "メーカーサイト";
+          else if (lower.includes("iherb")) label = "iHerb";
+          sourceMap.set(r.id as string, label ?? raw);
+        }
+      }
+    }
+
     // 保持している順序（類似度順）で並び替え
     const orderMap = new Map<string, number>();
     ids.forEach((id, index) => orderMap.set(id, index));
 
     const ordered =
-      rows?.slice().sort((a: any, b: any) => {
-        const ai = orderMap.get(a.id) ?? 0;
-        const bi = orderMap.get(b.id) ?? 0;
-        return ai - bi;
-      }) ?? [];
+      rows
+        ?.slice()
+        .sort((a: any, b: any) => {
+          const ai = orderMap.get(a.id) ?? 0;
+          const bi = orderMap.get(b.id) ?? 0;
+          return ai - bi;
+        })
+        .map((row: any) => ({
+          ...row,
+          source_name_label:
+            typeof row.source_text_id === "string"
+              ? sourceMap.get(row.source_text_id as string) ?? null
+              : null,
+        })) ?? [];
 
     return NextResponse.json({
       products: ordered,
