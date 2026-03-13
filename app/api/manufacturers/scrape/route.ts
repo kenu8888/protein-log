@@ -107,6 +107,90 @@ async function enrichImagesFromDetailPages(products: ParsedProduct[]) {
   }
 }
 
+// 一覧カードだけではプロテインか判定しづらい商品について、
+// 商品個別ページを数件だけ取得して再判定し、プロテインのみを残す
+async function filterProductsUsingDetailPages(
+  products: ParsedProduct[]
+): Promise<ParsedProduct[]> {
+  const MAX_DETAIL_FETCHES = 30
+  let fetchedCount = 0
+
+  const result: ParsedProduct[] = []
+
+  for (const p of products) {
+    const baseText = (p.raw_product_name ?? p.product_name ?? "").trim()
+    const decision = evaluateProteinText(baseText)
+
+    if (decision === "exclude") {
+      continue
+    }
+    if (decision === "include") {
+      result.push(p)
+      continue
+    }
+
+    // decision === "unknown" の場合だけ、余裕があれば商品詳細ページを見に行く
+    if (!p.source_url || fetchedCount >= MAX_DETAIL_FETCHES) {
+      // 詳細を見に行けない場合はノイズ混入を避けるためスキップ
+      continue
+    }
+
+    try {
+      const res = await fetch(p.source_url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        },
+      })
+      if (!res.ok) continue
+
+      const html = await res.text()
+      const $ = load(html)
+
+      // タイトル + 商品説明 + 栄養成分あたりをざっくりまとめてテキスト化
+      const title = $("h1")
+        .first()
+        .text()
+        .replace(/\s+/g, " ")
+        .trim()
+      const desc = $(".product-description, .description, main")
+        .first()
+        .text()
+        .replace(/\s+/g, " ")
+        .trim()
+      const nutrition = $(".nutritional-info-container, table")
+        .first()
+        .text()
+        .replace(/\s+/g, " ")
+        .trim()
+
+      const detailText = [title, desc, nutrition]
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 2000)
+
+      if (!detailText) continue
+
+      const detailDecision = evaluateProteinText(detailText)
+      if (detailDecision === "exclude") {
+        continue
+      }
+
+      // 詳細ページテキストを raw_product_name として保持（AI 判定に活用）
+      p.raw_product_name = detailText
+      result.push(p)
+
+      fetchedCount += 1
+      await sleep(randomDelay())
+    } catch (e) {
+      console.error(`failed to refine product by detail page: ${p.source_url}`, e)
+      continue
+    }
+  }
+
+  return result
+}
+
 function parseUnit(text: string): { unit_text: string | null; unit_kg: number | null } {
   // パターン1: 「1kg×3袋」「250g x 2 個」などの総量
   const packMatch = text.match(/([\d.,]+)\s*(kg|g)\s*[×xX]\s*([\d.,]+)/i)
@@ -191,6 +275,66 @@ function extractFlavorFromText(text: string): string | null {
   return hit ?? null
 }
 
+type ProteinTextDecision = "include" | "exclude" | "unknown"
+
+function evaluateProteinText(text: string): ProteinTextDecision {
+  const lower = text.toLowerCase()
+
+  const includesAny = (words: string[]) =>
+    words.some((w) => lower.includes(w))
+
+  // 明らかに除外したいもの（サプリ・お菓子・バー系）
+  const excludeKeywords = [
+    "bcaa",
+    "eaa",
+    "hmb",
+    "クレアチン",
+    "creatine",
+    "サプリメント",
+    "サプリ",
+    "ビタミン",
+    "ミネラル",
+    "マルチビタミン",
+    "バー",
+    "クッキー",
+    "ゼリー",
+    "グミ",
+    "キャンディ",
+    "チョコレート",
+    "スナック",
+    "タブレット",
+    "カプセル",
+  ]
+
+  if (includesAny(excludeKeywords)) {
+    return "exclude"
+  }
+
+  // 積極的に含めたいプロテイン関連キーワード
+  const includeKeywords = [
+    "プロテイン",
+    "protein",
+    "ホエイ",
+    "wpc",
+    "wpi",
+    "カゼイン",
+    "ソイプロテイン",
+    "ソイ プロテイン",
+    "大豆たんぱく",
+    "大豆タンパク",
+  ]
+
+  if (includesAny(includeKeywords)) {
+    return "include"
+  }
+
+  return "unknown"
+}
+
+function isLikelyProtein(text: string): boolean {
+  return evaluateProteinText(text) === "include"
+}
+
 function parseManufacturerPage(
   html: string,
   baseUrl: string,
@@ -206,6 +350,10 @@ function parseManufacturerPage(
     const container = $(el)
     const text = container.text().replace(/\s+/g, " ").trim()
     if (!text) return
+
+    // 一覧カードレベルで明らかに「プロテインではない」と判断できるものはここで除外
+    const decision = evaluateProteinText(text)
+    if (decision === "exclude") return
 
     const priceInfo = parsePrice(text)
     const unitInfo = parseUnit(text)
@@ -479,6 +627,10 @@ export async function POST() {
           src.manufacturer_name,
           src.manufacturer_code
         )
+        // 一覧カードだけでは曖昧な商品について、詳細ページを見てからプロテイン判定を強化する
+        if (parsed.length > 0) {
+          parsed = await filterProductsUsingDetailPages(parsed)
+        }
       }
 
       if (parsed.length > 0) {

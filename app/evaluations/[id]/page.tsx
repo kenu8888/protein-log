@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { supabase } from "../../../lib/supabase"
 
 type ClassifiedDetail = {
@@ -10,6 +10,9 @@ type ClassifiedDetail = {
   manufacturer: string | null
   product_name: string | null
   flavor: string | null
+  display_manufacturer: string | null
+  display_product_name: string | null
+  display_flavor: string | null
   price_jpy: number | null
   protein_grams_per_serving: number | null
   calories: number | null
@@ -18,6 +21,7 @@ type ClassifiedDetail = {
   price_per_kg: number | null
   product_url: string | null
   product_image_url: string | null
+  is_in_stock: boolean | null
   confidence: number | null
 }
 
@@ -165,6 +169,10 @@ export default function EvaluationDetailPage() {
     artificialSweetener: 3
   })
   const [saving, setSaving] = useState(false)
+  const [isRatingModalOpen, setIsRatingModalOpen] = useState(false)
+  const [showRatingBanner, setShowRatingBanner] = useState(false)
+
+  const router = useRouter()
 
   // ダミーのレビュー・スコア（後で DB 接続に置き換え予定）
   const dummyReviews: DummyReview[] = [
@@ -205,10 +213,10 @@ export default function EvaluationDetailPage() {
 
   // 好みが分かれる軸のダミースコア（0〜100）
   const preferenceLevels = {
-    sweetness: 45,           // 甘さ
-    richness: 55,            // 味の濃さ
-    milkFeel: 40,            // ミルク感
-    artificialSweetener: 35, // 人工甘味料感
+    sweetness: 45, // 甘さ
+    richness: 55,  // 味の濃さ
+    milkFeel: 40,  // ミルク感
+    artificialSweetener: 35 // 人工甘味料感
   }
 
   function getClientToken(): string | null {
@@ -223,16 +231,27 @@ export default function EvaluationDetailPage() {
 
   async function loadQuickRatings(productId: string) {
     const token = getClientToken()
-    // 集計
-    const { data, error } = await supabase
-      .from("product_quick_ratings")
-      .select(
-        "taste, mixability, cost_performance, repeat_intent, foam, sweetness, richness, milk_feel, artificial_sweetener, client_token"
-      )
-      .eq("product_result_id", productId)
+    let data: any[] | null = null
 
-    if (error) {
-      console.error("failed to load quick ratings", error)
+    try {
+      const result = await supabase
+        .from("product_quick_ratings")
+        // スキーマ差異による「列が存在しない」エラーを避けるため、まずは * で取得
+        .select("*")
+        .eq("product_result_id", productId)
+
+      if (result.error && (result.error as any).message) {
+        console.error(
+          "failed to load quick ratings",
+          (result.error as any).message,
+          result.error
+        )
+        return
+      }
+
+      data = (result.data as any[]) ?? []
+    } catch (e) {
+      console.error("failed to load quick ratings (exception)", e)
       return
     }
 
@@ -366,7 +385,7 @@ export default function EvaluationDetailPage() {
       const { data, error } = await supabase
         .from("product_classification_results")
         .select(
-          "id, manufacturer, product_name, flavor, price_jpy, price_per_kg, protein_grams_per_serving, calories, carbs, fat, product_url, product_image_url, confidence"
+          "id, manufacturer, product_name, flavor, display_manufacturer, display_product_name, display_flavor, price_jpy, price_per_kg, protein_grams_per_serving, calories, carbs, fat, product_url, product_image_url, is_in_stock, confidence"
         )
         .eq("id", id)
         .maybeSingle()
@@ -390,6 +409,9 @@ export default function EvaluationDetailPage() {
         manufacturer: (row.manufacturer as string) ?? null,
         product_name: (row.product_name as string) ?? null,
         flavor: (row.flavor as string) ?? null,
+        display_manufacturer: (row.display_manufacturer as string) ?? null,
+        display_product_name: (row.display_product_name as string) ?? null,
+        display_flavor: (row.display_flavor as string) ?? null,
         price_jpy:
           typeof row.price_jpy === "number" ? (row.price_jpy as number) : null,
         price_per_kg:
@@ -406,6 +428,8 @@ export default function EvaluationDetailPage() {
           typeof row.fat === "number" ? (row.fat as number) : null,
         product_url: (row.product_url as string) ?? null,
         product_image_url: (row.product_image_url as string) ?? null,
+        is_in_stock:
+          typeof row.is_in_stock === "boolean" ? (row.is_in_stock as boolean) : null,
         confidence:
           typeof row.confidence === "number" ? (row.confidence as number) : null
       }
@@ -417,11 +441,64 @@ export default function EvaluationDetailPage() {
     load()
   }, [id])
 
+  // 「飲んだことがありますか？」バナーを 5 秒後にふわっと表示
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowRatingBanner(true)
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [])
+
+  const renderPricePerKg = () => {
+    if (!detail) return "不明"
+    if (detail.price_per_kg != null) {
+      return `約 ¥${Math.round(detail.price_per_kg).toLocaleString()} / kg`
+    }
+    if (detail.price_jpy != null) {
+      return `¥${detail.price_jpy.toLocaleString()}（総額）`
+    }
+    if (detail.is_in_stock === false) {
+      return "在庫なし"
+    }
+    return "不明"
+  }
+
+  const getApproxCapacityKg = () => {
+    if (!detail) return null
+    if (
+      detail.price_jpy != null &&
+      detail.price_per_kg != null &&
+      detail.price_per_kg > 0
+    ) {
+      return detail.price_jpy / detail.price_per_kg
+    }
+    return null
+  }
+
+  const formatProductUrlLabel = (url: string | null) => {
+    if (!url) return null
+    try {
+      const u = new URL(url)
+      if (u.hostname.includes("amazon.")) return "Amazon"
+      if (u.hostname.includes("iherb.")) return "iHerb"
+      return "メーカーサイト"
+    } catch {
+      return "商品ページ"
+    }
+  }
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-white px-4 py-10 text-gray-900">
-        <main className="mx-auto flex max-w-4xl flex-col gap-6">
-          <p className="text-xs text-gray-500">読み込み中です...</p>
+      <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A]">
+        <header className="sticky top-0 z-30 w-full bg-[#1F2A44] text-white shadow-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+            <span className="text-xs font-semibold tracking-[0.18em] text-teal-200">
+              PROTEIN LOG
+            </span>
+          </div>
+        </header>
+        <main className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-10">
+          <p className="text-xs text-[#64748B]">読み込み中です...</p>
         </main>
       </div>
     )
@@ -429,15 +506,27 @@ export default function EvaluationDetailPage() {
 
   if (error || !detail) {
     return (
-      <div className="min-h-screen bg-white px-4 py-10 text-gray-900">
-        <main className="mx-auto flex max-w-3xl flex-col gap-8">
+      <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A]">
+        <header className="sticky top-0 z-30 w-full bg-[#1F2A44] text-white shadow-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold tracking-[0.18em] text-teal-200">
+                PROTEIN LOG
+              </span>
+              <span className="text-[11px] text-slate-200/80">
+                あなたに合うプロテインが見つかる
+              </span>
+            </div>
+          </div>
+        </header>
+        <main className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-10">
           <header className="flex items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">
                 商品が見つかりませんでした
               </h1>
-              <p className="mt-1 text-sm text-gray-500">
-                URL を確認するか、トップページから選び直してください。
+              <p className="mt-1 text-sm text-[#64748B]">
+                URL を確認するか、トップページから選び直してください
               </p>
               {error && (
                 <p className="mt-2 text-xs text-red-500">
@@ -447,636 +536,520 @@ export default function EvaluationDetailPage() {
             </div>
             <Link
               href="/"
-              className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:border-gray-400 hover:bg-gray-50"
+              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 hover:border-slate-400 hover:bg-slate-50"
             >
               トップに戻る
             </Link>
           </header>
         </main>
+        <footer className="mt-12 border-t border-slate-200 bg-[#0F172A] text-slate-100">
+          <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 text-xs text-slate-300">
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold tracking-[0.18em] text-teal-200">
+                PROTEIN LOG
+              </p>
+              <p className="text-[11px]">
+                口コミとデータで比較できるプロテイン専用レビューサービス
+              </p>
+            </div>
+            <div className="text-[10px] text-slate-400">
+              &copy; {new Date().getFullYear()} Protein Log
+            </div>
+          </div>
+        </footer>
       </div>
     )
   }
 
-  return (
-    <div className="min-h-screen bg-white px-4 py-10 text-gray-900">
-      <main className="mx-auto flex max-w-4xl flex-col gap-10">
-        <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500">
-              Protein Detail
-            </p>
-            <h1 className="text-2xl font-semibold tracking-tight text-gray-900">
-              {detail.product_name ?? "名称不明のプロテイン"}
-            </h1>
-            <p className="text-sm text-gray-500">
-              {detail.manufacturer ?? "メーカー不明"}
-              {detail.flavor ? ` ・ ${detail.flavor}` : ""}
-            </p>
-          </div>
-          <Link
-            href="/"
-            className="self-start rounded-full border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:border-gray-400 hover:bg-gray-50"
-          >
-            トップに戻る
-          </Link>
-        </header>
+  const mainTitle =
+    detail.display_product_name ?? detail.product_name ?? "名称不明のプロテイン"
+  const mainManufacturer =
+    detail.display_manufacturer ?? detail.manufacturer ?? "メーカー不明"
+  const mainFlavor = detail.display_flavor ?? detail.flavor
+  const approxCapacityKg = getApproxCapacityKg()
 
-        <section className="grid gap-8 md:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A]">
+      {/* ブランドバー */}
+      <header className="sticky top-0 z-30 w-full bg-[#1F2A44] text-white shadow-sm">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold tracking-[0.18em] text-teal-200">
+              PROTEIN LOG
+            </span>
+            <span className="hidden text-[11px] text-slate-200/80 sm:inline">
+              あなたに合うプロテインが見つかる
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="rounded-full border border-slate-500/60 bg-[#0F172A] px-3 py-1 text-[11px] text-slate-100 hover:border-teal-300"
+            >
+              トップページに戻る
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-8">
+        {/* タイトル＋価格 */}
+        <section className="rounded-2xl bg-white/80 px-4 py-4 shadow-sm ring-1 ring-slate-200/70 sm:px-6 sm:py-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#64748B]">
+                PRODUCT DETAIL
+              </p>
+              <h1 className="text-xl font-semibold tracking-tight text-[#0F172A] sm:text-2xl">
+                {mainTitle}
+              </h1>
+              <p className="text-[13px] text-[#64748B]">
+                {mainManufacturer}
+                {mainFlavor ? ` ・ ${mainFlavor}` : ""}
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-2 text-right text-[11px] text-[#64748B]">
+              <div className="space-y-0.5">
+                <span>
+                  1kgあたりの金額:{" "}
+                  <span className="font-semibold text-[#0F172A]">
+                    {renderPricePerKg()}
+                  </span>
+                </span>
+                {detail.protein_grams_per_serving != null && (
+                  <span className="block">
+                    1食あたりタンパク質:{" "}
+                    <span className="font-semibold text-[#0F172A]">
+                      {detail.protein_grams_per_serving} g
+                    </span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* メインレイアウト：左（画像＋PFC＋URL）、右（みんなの口コミ評価＋一言レビュー） */}
+        <section className="grid gap-8 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+          {/* 左カラム */}
           <div className="space-y-4">
-            <div className="rounded-2xl border bg-white px-6 py-6 flex items-center justify-center">
+            {/* 画像＋商品名・フレーバー */}
+            <div className="rounded-2xl bg-white px-5 py-5 shadow-sm ring-1 ring-slate-200/70">
               {detail.product_image_url ? (
                 <img
                   src={detail.product_image_url}
-                  alt={detail.product_name ?? "protein"}
-                  className="max-h-64 w-full object-contain"
+                  alt={mainTitle}
+                  className="mx-auto max-h-64 w-full max-w-sm object-contain"
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-56 w-full items-center justify-center text-xs text-gray-400 bg-gray-50 rounded-xl">
+                <div className="flex h-56 w-full items-center justify-center rounded-xl bg-slate-50 text-xs text-slate-400">
                   画像はまだ登録されていません
                 </div>
               )}
+              <div className="mt-3 space-y-0.5 text-xs text-[#0F172A]">
+                <p className="text-[13px] font-semibold">{mainTitle}</p>
+                {mainFlavor && (
+                  <p className="text-[11px] text-[#64748B]">フレーバー: {mainFlavor}</p>
+                )}
+              </div>
             </div>
-            <div className="rounded-2xl border bg-white px-4 py-3 text-xs text-gray-700">
-              <dl className="grid gap-3 sm:grid-cols-2">
+
+            {/* 商品情報（画像のすぐ下） */}
+            <div className="rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200/70">
+              <h2 className="text-sm font-semibold text-[#0F172A]">
+                商品情報
+              </h2>
+              <div className="mt-3 space-y-3 text-xs text-[#0F172A]">
                 <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    1kgあたりの参考価格
-                  </dt>
-                  <dd className="mt-1 font-medium">
+                  <p className="text-[11px] text-[#64748B]">1kgあたりの金額</p>
+                  <p className="text-xl font-semibold text-[#0F172A]">
                     {detail.price_per_kg != null
-                      ? `約 ¥${Math.round(detail.price_per_kg).toLocaleString()} / kg`
-                      : detail.price_jpy != null
-                      ? `¥${detail.price_jpy.toLocaleString()}（総額）`
+                      ? `¥${Math.round(detail.price_per_kg).toLocaleString()} / kg`
+                      : renderPricePerKg()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-[#64748B]">販売価格</p>
+                  <p className="text-base font-semibold text-[#0F172A]">
+                    {detail.price_jpy != null
+                      ? `¥${detail.price_jpy.toLocaleString()}${
+                          approxCapacityKg != null
+                            ? `（約 ${Math.round(approxCapacityKg * 1000)}g）`
+                            : ""
+                        }`
                       : "不明"}
+                  </p>
+                </div>
+                <div className="pt-1 border-t border-slate-100 mt-1">
+                  <p className="text-[11px] text-[#64748B] mb-0.5">販売ページ</p>
+                  {detail.product_url ? (
+                    <a
+                      href={detail.product_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] text-blue-600 underline"
+                    >
+                      <span>{formatProductUrlLabel(detail.product_url)} で見る</span>
+                    </a>
+                  ) : (
+                    <p className="text-[11px] text-[#94A3B8]">
+                      URL 情報はまだ登録されていません
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* PFC カード */}
+            <div className="rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200/70">
+              <h2 className="text-sm font-semibold text-[#0F172A]">
+                栄養バランス（1食あたりの目安）
+              </h2>
+              <dl className="mt-3 grid gap-3 text-xs text-[#0F172A] sm:grid-cols-2">
+                <div>
+                  <dt className="text-[11px] text-[#64748B]">カロリー</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {detail.calories != null ? `${detail.calories} kcal` : "不明"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    1食あたりタンパク質
-                  </dt>
-                  <dd className="mt-1 font-medium">
+                  <dt className="text-[11px] text-[#64748B]">タンパク質</dt>
+                  <dd className="mt-0.5 font-medium">
                     {detail.protein_grams_per_serving != null
                       ? `${detail.protein_grams_per_serving} g`
                       : "不明"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    1食あたりカロリー
-                  </dt>
-                  <dd className="mt-1 font-medium">
-                    {detail.calories != null ? `${detail.calories} kcal` : "不明"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    1食あたり糖質
-                  </dt>
-                  <dd className="mt-1 font-medium">
+                  <dt className="text-[11px] text-[#64748B]">糖質</dt>
+                  <dd className="mt-0.5 font-medium">
                     {detail.carbs != null ? `${detail.carbs} g` : "不明"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    1食あたり脂質
-                  </dt>
-                  <dd className="mt-1 font-medium">
+                  <dt className="text-[11px] text-[#64748B]">脂質</dt>
+                  <dd className="mt-0.5 font-medium">
                     {detail.fat != null ? `${detail.fat} g` : "不明"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                    商品ページ
-                  </dt>
-                  <dd className="mt-1">
-                    {detail.product_url ? (
-                      <a
-                        href={detail.product_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[11px] text-blue-600 underline"
-                      >
-                        メーカー / ショップのページを開く
-                      </a>
-                    ) : (
-                      <span className="text-gray-400 text-[11px]">
-                        URL 情報はまだ登録されていません
-                      </span>
-                    )}
                   </dd>
                 </div>
               </dl>
             </div>
           </div>
 
+          {/* 右カラム */}
           <div className="space-y-4">
-            {/* 1. みんなの評価（閲覧用カード） */}
-            <div className="rounded-2xl border bg-white px-4 py-4 text-xs text-gray-700">
-              <h2 className="text-sm font-semibold text-gray-900">
-                みんなの評価
+            {/* みんなの口コミ評価（レーダー＋バー） */}
+            <div className="rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200/70 text-xs text-[#0F172A]">
+              <h2 className="text-sm font-semibold text-[#0F172A]">
+                みんなの口コミ評価
               </h2>
-              <p className="mt-1 text-[11px] text-gray-500">
-                ログインなしで集めた、全体の傾向です。
+              <p className="mt-1 text-[11px] text-[#64748B]">
+                ログインなしで集めた、全体の傾向です
               </p>
-              <div className="mt-2 space-y-1 text-[11px]">
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">味のおいしさ</span>
-                  <span className="text-amber-500">
-                    {summary.avgTaste != null
-                      ? "★".repeat(Math.round(summary.avgTaste)).padEnd(5, "☆")
-                      : "☆☆☆☆☆"}
-                  </span>
-                  {summary.avgTaste != null && (
-                    <span className="text-[10px] text-gray-500">
-                      {summary.avgTaste.toFixed(1)} / 5.0
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">混ざりやすさ</span>
-                  <span className="text-amber-500">
-                    {summary.avgMixability != null
-                      ? "★"
-                          .repeat(Math.round(summary.avgMixability))
-                          .padEnd(5, "☆")
-                      : "☆☆☆☆☆"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">コスパ</span>
-                  <span className="text-amber-500">
-                    {summary.avgCostPerformance != null
-                      ? "★"
-                          .repeat(Math.round(summary.avgCostPerformance))
-                          .padEnd(5, "☆")
-                      : "☆☆☆☆☆"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">リピート意向</span>
-                  <span className="text-amber-500">
-                    {summary.avgRepeatIntent != null
-                      ? "★"
-                          .repeat(Math.round(summary.avgRepeatIntent))
-                          .padEnd(5, "☆")
-                      : "☆☆☆☆☆"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">泡立ち</span>
-                  <span className="text-amber-500">
-                    {summary.avgFoam != null
-                      ? "★".repeat(Math.round(summary.avgFoam)).padEnd(5, "☆")
-                      : "☆☆☆☆☆"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-20 text-[10px] text-gray-500">甘さ</span>
-                  <span className="text-pink-500">
-                    {summary.avgSweetness != null
-                      ? "◆"
-                          .repeat(Math.round(summary.avgSweetness))
-                          .padEnd(5, "◇")
-                      : "◇◇◇◇◇"}
-                  </span>
-                  {summary.avgSweetness != null && (
-                    <span className="text-[10px] text-gray-500">
-                      {summary.avgSweetness.toFixed(1)} / 5.0
-                    </span>
-                  )}
-                </div>
-                {summary.count > 0 && (
-                  <p className="mt-1 text-[10px] text-gray-400">
-                    {summary.count} 件の簡易評価が集まっています。
-                  </p>
-                )}
-              </div>
-            </div>
 
-            {/* 2. あなたの評価（入力用カード） */}
-            <div className="rounded-2xl border bg-white px-4 py-4 text-xs text-gray-700">
-              <h2 className="text-sm font-semibold text-gray-900">
-                あなたの評価
-              </h2>
-              <p className="mt-1 text-[11px] text-gray-500">
-                飲んだことがあれば、感覚で構わないので教えてください。
-              </p>
-              <div className="mt-2 space-y-3">
-                {/* レーダー5軸を星評価で */}
-                {[
-                  { key: "taste", label: "味のおいしさ" },
-                  { key: "mixability", label: "混ざりやすさ" },
-                  { key: "costPerformance", label: "コスパ" },
-                  { key: "repeatIntent", label: "リピート意向" },
-                  { key: "foam", label: "泡立ち" },
-                ].map((item) => (
-                  <div key={item.key} className="flex items-center gap-2">
-                    <span className="w-24 text-[10px] text-gray-500">
-                      {item.label}
-                    </span>
-                    {[1, 2, 3, 4, 5].map((v) => (
-                      <button
-                        key={v}
-                        disabled={saving || !detail}
-                        onClick={() =>
-                          setMyRating((prev) => ({
-                            ...prev,
-                            [item.key]: v,
-                          }))
-                        }
-                        className="text-base leading-none"
-                      >
-                        {myRating[item.key as keyof MyQuickRating] >= v
-                          ? "★"
-                          : "☆"}
-                      </button>
-                    ))}
-                  </div>
-                ))}
-
-                {/* 好み4軸をバーで（1〜5） */}
-                {[
-                  {
-                    key: "sweetness",
-                    label: "甘さ",
-                    left: "控えめ",
-                    right: "しっかり甘め",
-                  },
-                  {
-                    key: "richness",
-                    label: "味の濃さ",
-                    left: "さっぱり",
-                    right: "しっかり濃い",
-                  },
-                  {
-                    key: "milkFeel",
-                    label: "ミルク感",
-                    left: "あっさり",
-                    right: "ミルク感強め",
-                  },
-                  {
-                    key: "artificialSweetener",
-                    label: "人工甘味料感",
-                    left: "ほとんど感じない",
-                    right: "強く感じる",
-                  },
-                ].map((item) => (
-                  <div key={item.key} className="flex items-center gap-3">
-                    <span className="w-24 text-[10px] text-gray-500">
-                      {item.label}
-                    </span>
-                    <div className="flex-1">
-                      <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                        <span>{item.left}</span>
-                        <span>{item.right}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={1}
-                        max={5}
-                        step={1}
-                        disabled={saving || !detail}
-                        value={
-                          myRating[item.key as keyof MyQuickRating] ?? 3
-                        }
-                        onChange={(e) =>
-                          setMyRating((prev) => ({
-                            ...prev,
-                            [item.key]: Number(e.target.value),
-                          }))
-                        }
-                        className="w-full accent-gray-800"
-                      />
-                    </div>
-                  </div>
-                ))}
-
-                <button
-                  disabled={saving || !detail}
-                  onClick={() => detail && saveQuickRating(detail.id)}
-                  className="mt-2 inline-flex w-full items-center justify-center rounded-full border border-gray-300 bg-white px-3 py-1.5 text-[11px] text-gray-700 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-60"
-                >
-                  この内容で評価を送信
-                </button>
-                {saving && (
-                  <p className="text-[10px] text-gray-400 mt-1">
-                    保存中です...
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* 3. 味のバランス（説明用カード） */}
-            <div className="rounded-2xl border bg-white px-4 py-4 text-xs text-gray-700">
-              <h2 className="text-sm font-semibold text-gray-900">
-                レーダーチャート（ユーザー評価イメージ）
-              </h2>
-              <p className="mt-1 text-[11px] text-gray-500">
-                「味のおいしさ」「混ざりやすさ」「コスパ」「リピート意向」「泡立ち」の
-                5つの観点で、全体的なバランスをイメージ表示しています。
-                将来的には実際のレビューから集計した値を反映します。
-              </p>
-              <div className="mt-2 flex justify-center">
-                <RadarChart metrics={metrics} />
-              </div>
-            </div>
-
-            <div className="rounded-2xl border bg-white px-4 py-4 text-xs text-gray-700 space-y-4">
-              <div>
-                <h2 className="text-sm font-semibold text-gray-900">
-                  みんなの評価
-                </h2>
-                <p className="mt-1 text-[11px] text-gray-500">
-                  ログインなしで、気軽に「おいしさ」と「甘さ」を評価できます。
+              {/* レーダーチャート（星評価5軸のイメージ） */}
+              <div className="mt-3 rounded-xl bg-slate-50 px-3 py-3">
+                <p className="text-[10px] text-[#64748B] mb-1">
+                  味のおいしさ・混ざりやすさ・コスパ・リピート意向・泡立ちの5軸で、全体のバランスをイメージ表示しています
                 </p>
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">味のおいしさ</span>
-                    <span className="text-amber-500">
-                      {summary.avgTaste != null
-                        ? "★".repeat(Math.round(summary.avgTaste)).padEnd(5, "☆")
-                        : "☆☆☆☆☆"}
-                    </span>
-                    <span className="text-[10px] text-gray-500">
-                      {summary.avgTaste != null
-                        ? `${summary.avgTaste.toFixed(1)} / 5.0`
-                        : "まだ評価がありません"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">混ざりやすさ</span>
-                    <span className="text-amber-500">
-                      {summary.avgMixability != null
-                        ? "★"
-                            .repeat(Math.round(summary.avgMixability))
-                            .padEnd(5, "☆")
-                        : "☆☆☆☆☆"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">コスパ</span>
-                    <span className="text-amber-500">
-                      {summary.avgCostPerformance != null
-                        ? "★"
-                            .repeat(Math.round(summary.avgCostPerformance))
-                            .padEnd(5, "☆")
-                        : "☆☆☆☆☆"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">リピート意向</span>
-                    <span className="text-amber-500">
-                      {summary.avgRepeatIntent != null
-                        ? "★"
-                            .repeat(Math.round(summary.avgRepeatIntent))
-                            .padEnd(5, "☆")
-                        : "☆☆☆☆☆"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">泡立ち</span>
-                    <span className="text-amber-500">
-                      {summary.avgFoam != null
-                        ? "★".repeat(Math.round(summary.avgFoam)).padEnd(5, "☆")
-                        : "☆☆☆☆☆"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-500">甘さ</span>
-                    <span className="text-pink-500">
-                      {summary.avgSweetness != null
-                        ? "◆"
-                            .repeat(Math.round(summary.avgSweetness))
-                            .padEnd(5, "◇")
-                        : "◇◇◇◇◇"}
-                    </span>
-                    {summary.avgSweetness != null && (
-                      <span className="text-[10px] text-gray-500">
-                        {summary.avgSweetness.toFixed(1)} / 5.0
-                      </span>
-                    )}
-                  </div>
-                  {summary.count > 0 && (
-                    <span className="text-[10px] text-gray-400">
-                      {summary.count} 件の簡易評価
-                    </span>
-                  )}
+                <div className="flex justify-center">
+                  <RadarChart metrics={metrics} />
                 </div>
               </div>
 
-              <div className="border-t pt-3">
-                <h2 className="text-sm font-semibold text-gray-900">
-                  あなたの評価
-                </h2>
-                <p className="mt-1 text-[11px] text-gray-500">
-                  感覚で構わないので、飲んだことがあれば一言評価をお願いします。
-                </p>
-                <div className="mt-2 space-y-3">
-                  {/* レーダー5軸を星評価で */}
-                  {[
-                    { key: "taste", label: "味のおいしさ" },
-                    { key: "mixability", label: "混ざりやすさ" },
-                    { key: "costPerformance", label: "コスパ" },
-                    { key: "repeatIntent", label: "リピート意向" },
-                    { key: "foam", label: "泡立ち" },
-                  ].map((item) => (
-                    <div key={item.key} className="flex items-center gap-2">
-                      <span className="w-24 text-[10px] text-gray-500">
-                        {item.label}
-                      </span>
-                      {[1, 2, 3, 4, 5].map((v) => (
-                        <button
-                          key={v}
-                          disabled={saving || !detail}
-                          onClick={() =>
-                            setMyRating((prev) => ({
-                              ...prev,
-                              [item.key]: v,
-                            }))
-                          }
-                          className="text-base leading-none"
-                        >
-                          {myRating[item.key as keyof MyQuickRating] >= v
-                            ? "★"
-                            : "☆"}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-
-                  {/* 好み4軸をバーで（1〜5） */}
-                  {[
-                    {
-                      key: "sweetness",
-                      label: "甘さ",
-                      left: "控えめ",
-                      right: "しっかり甘め",
-                    },
-                    {
-                      key: "richness",
-                      label: "味の濃さ",
-                      left: "さっぱり",
-                      right: "しっかり濃い",
-                    },
-                    {
-                      key: "milkFeel",
-                      label: "ミルク感",
-                      left: "あっさり",
-                      right: "ミルク感強め",
-                    },
-                    {
-                      key: "artificialSweetener",
-                      label: "人工甘味料感",
-                      left: "ほとんど感じない",
-                      right: "強く感じる",
-                    },
-                  ].map((item) => (
-                    <div key={item.key} className="flex items-center gap-3">
-                      <span className="w-24 text-[10px] text-gray-500">
-                        {item.label}
-                      </span>
-                      <div className="flex-1">
-                        <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                          <span>{item.left}</span>
-                          <span>{item.right}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={1}
-                          max={5}
-                          step={1}
-                          disabled={saving || !detail}
-                          value={
-                            myRating[item.key as keyof MyQuickRating] ?? 3
-                          }
-                          onChange={(e) =>
-                            setMyRating((prev) => ({
-                              ...prev,
-                              [item.key]: Number(e.target.value),
-                            }))
-                          }
-                          className="w-full accent-gray-800"
-                        />
-                      </div>
-                    </div>
-                  ))}
-
-                  <button
-                    disabled={saving || !detail}
-                    onClick={() => detail && saveQuickRating(detail.id)}
-                    className="mt-2 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white px-3 py-1.5 text-[11px] text-gray-700 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-60"
-                  >
-                    この内容で評価を送信
-                  </button>
-                  {saving && (
-                    <p className="text-[10px] text-gray-400">保存中です...</p>
-                  )}
-                </div>
-              </div>
-
-              <h2 className="text-sm font-semibold text-gray-900">
-                味のバランス（好みが分かれるポイント）
-              </h2>
-              <p className="mt-1 text-[11px] text-gray-500">
-                甘さ・味の濃さ・ミルク感・人工甘味料感など、好みが分かれる要素を
-                左右のバーでイメージ表示しています。
-              </p>
-              <div className="mt-3 space-y-2">
-                <div className="flex items-center gap-3">
-                  <span className="w-20 text-[10px] text-gray-500">甘さ</span>
+              {/* 好み4軸（甘さ・味の濃さ・ミルク感・人工甘味料感） */}
+              <div className="mt-3 space-y-2 text-[11px]">
+                <div className="flex items-center gap-2">
+                  <span className="w-20 text-[10px] text-[#64748B]">甘さ</span>
                   <div className="flex-1">
-                    <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                      <span>控えめ</span>
-                      <span>しっかり甘め</span>
+                    <div className="flex justify-between text-[9px] text-[#94A3B8] mb-0.5">
+                      <span>控えめ寄り</span>
+                      <span>甘め寄り</span>
                     </div>
-                    <div className="relative h-2 rounded-full bg-gray-200">
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
                       <div
-                        className="absolute h-2 rounded-full bg-pink-400"
-                        style={{ width: `${preferenceLevels.sweetness}%` }}
+                        className="h-1.5 rounded-full bg-[#0F9E90]"
+                        style={{
+                          width: `${
+                            summary.avgSweetness != null
+                              ? (summary.avgSweetness / 5) * 100
+                              : 0
+                          }%`,
+                        }}
                       />
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-20 text-[10px] text-gray-500">味の濃さ</span>
+                <div className="flex items-center gap-2">
+                  <span className="w-20 text-[10px] text-[#64748B]">味の濃さ</span>
                   <div className="flex-1">
-                    <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                      <span>さっぱり</span>
-                      <span>しっかり濃い</span>
+                    <div className="flex justify-between text-[9px] text-[#94A3B8] mb-0.5">
+                      <span>さっぱり寄り</span>
+                      <span>濃いめ寄り</span>
                     </div>
-                    <div className="relative h-2 rounded-full bg-gray-200">
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
                       <div
-                        className="absolute h-2 rounded-full bg-emerald-400"
-                        style={{ width: `${preferenceLevels.richness}%` }}
+                        className="h-1.5 rounded-full bg-[#0F9E90]"
+                        style={{
+                          width: `${
+                            summary.avgRichness != null
+                              ? (summary.avgRichness / 5) * 100
+                              : 0
+                          }%`,
+                        }}
                       />
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-20 text-[10px] text-gray-500">ミルク感</span>
+                <div className="flex items-center gap-2">
+                  <span className="w-20 text-[10px] text-[#64748B]">ミルク感</span>
                   <div className="flex-1">
-                    <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                      <span>あっさり</span>
-                      <span>ミルク感強め</span>
+                    <div className="flex justify-between text-[9px] text-[#94A3B8] mb-0.5">
+                      <span>あっさり寄り</span>
+                      <span>ミルク感強め寄り</span>
                     </div>
-                    <div className="relative h-2 rounded-full bg-gray-200">
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
                       <div
-                        className="absolute h-2 rounded-full bg-sky-400"
-                        style={{ width: `${preferenceLevels.milkFeel}%` }}
+                        className="h-1.5 rounded-full bg-[#0F9E90]"
+                        style={{
+                          width: `${
+                            summary.avgMilkFeel != null
+                              ? (summary.avgMilkFeel / 5) * 100
+                              : 0
+                          }%`,
+                        }}
                       />
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-20 text-[10px] text-gray-500">
+                <div className="flex items-center gap-2">
+                  <span className="w-20 text-[10px] text-[#64748B]">
                     人工甘味料感
                   </span>
                   <div className="flex-1">
-                    <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
-                      <span>ほとんど感じない</span>
-                      <span>強く感じる</span>
+                    <div className="flex justify-between text-[9px] text-[#94A3B8] mb-0.5">
+                      <span>ほとんど感じない寄り</span>
+                      <span>強く感じる寄り</span>
                     </div>
-                    <div className="relative h-2 rounded-full bg-gray-200">
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
                       <div
-                        className="absolute h-2 rounded-full bg-violet-400"
-                        style={{ width: `${preferenceLevels.artificialSweetener}%` }}
+                        className="h-1.5 rounded-full bg-[#0F9E90]"
+                        style={{
+                          width: `${
+                            summary.avgArtificialSweetener != null
+                              ? (summary.avgArtificialSweetener / 5) * 100
+                              : 0
+                          }%`,
+                        }}
                       />
                     </div>
                   </div>
                 </div>
               </div>
+
+              {summary.count > 0 && (
+                <p className="mt-2 text-[10px] text-[#94A3B8]">
+                  {summary.count} 件の簡易評価が集まっています
+                </p>
+              )}
+            </div>
+
+            {/* 一言レビュー（ダミー） */}
+            <div className="rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200/70 text-xs text-[#0F172A]">
+              <h2 className="text-sm font-semibold text-[#0F172A]">
+                最近の一言レビュー（ダミー）
+              </h2>
+              <ul className="mt-2 space-y-2">
+                {dummyReviews.map((rev) => (
+                  <li key={rev.id} className="rounded-lg bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-[#0F172A]">{rev.title}</p>
+                      <span className="ml-2 text-[10px] text-[#94A3B8]">
+                        {rev.created_at} ・ {rev.nickname}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[10px] text-[#64748B]">
+                      {rev.body}
+                    </p>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         </section>
-
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-900">
-              口コミレビュー（サンプル）
-            </h2>
-            <span className="text-[10px] text-gray-400">
-              将来的には実際のユーザー投稿をここに表示します。
-            </span>
-          </div>
-          <div className="space-y-3 rounded-2xl border bg-white px-4 py-3 text-xs text-gray-700">
-            {dummyReviews.map((r) => (
-              <article key={r.id} className="border-b border-gray-100 pb-3 last:border-b-0 last:pb-0">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-[11px] font-semibold text-gray-900">
-                    {r.title}
-                  </h3>
-                  <span className="text-[10px] text-gray-400">
-                    {r.created_at} ・ {r.nickname}
-                  </span>
-                </div>
-                <p className="mt-1 text-[11px] leading-relaxed">{r.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
       </main>
+
+      {/* 「飲んだことがありますか？」バナー（PC: 右下 / モバイル: 画面下） */}
+      {detail && (
+        <div
+          className={[
+            "fixed inset-x-0 bottom-3 z-30 flex justify-center px-4 md:inset-x-auto md:right-4 md:bottom-4 md:justify-end pointer-events-none",
+            showRatingBanner ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4",
+            "transition-all duration-500 ease-out",
+          ].join(" ")}
+        >
+          <button
+            type="button"
+            onClick={() => setIsRatingModalOpen(true)}
+            className="pointer-events-auto w-full max-w-sm rounded-full bg-[#0F9E90] px-3 py-2 text-[12px] font-semibold text-white shadow-lg shadow-emerald-900/20 ring-1 ring-[#0C8A7E]/60 hover:bg-[#0C8A7E] focus:outline-none focus:ring-2 focus:ring-[#0F9E90]/70 md:max-w-xs md:rounded-2xl"
+          >
+            <span className="inline-flex items-center justify-center gap-2">
+              <span>飲んだことがありますか？</span>
+              <span className="text-[10px] font-normal text-emerald-50">
+                かんたん評価を送る
+              </span>
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* 評価モーダル */}
+      {isRatingModalOpen && detail && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white px-5 py-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-[#0F172A]">
+                  このプロテインを評価する
+                </h2>
+                <p className="mt-1 text-[11px] text-[#64748B]">
+                  飲んだことがあれば気軽に評価してみよう。感覚で大丈夫です
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRatingModalOpen(false)}
+                className="text-[18px] leading-none text-slate-400 hover:text-slate-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-3 space-y-3 text-xs text-[#0F172A]">
+              {[
+                { key: "taste", label: "味のおいしさ" },
+                { key: "mixability", label: "混ざりやすさ" },
+                { key: "costPerformance", label: "コスパ" },
+                { key: "repeatIntent", label: "リピート意向" },
+                { key: "foam", label: "泡立ち" },
+              ].map((item) => (
+                <div key={item.key} className="flex items-center gap-2">
+                  <span className="w-24 text-[10px] text-[#64748B]">
+                    {item.label}
+                  </span>
+                  {[1, 2, 3, 4, 5].map((v) => (
+                    <button
+                      key={v}
+                      disabled={saving}
+                      onClick={() =>
+                        setMyRating((prev) => ({
+                          ...prev,
+                          [item.key]: v,
+                        }))
+                      }
+                      className="text-base leading-none text-[#F59E0B]"
+                    >
+                      {myRating[item.key as keyof MyQuickRating] >= v ? "★" : "☆"}
+                    </button>
+                  ))}
+                </div>
+              ))}
+
+              {[
+                {
+                  key: "sweetness",
+                  label: "甘さ",
+                  left: "控えめ",
+                  right: "しっかり甘め",
+                },
+                {
+                  key: "richness",
+                  label: "味の濃さ",
+                  left: "さっぱり",
+                  right: "しっかり濃い",
+                },
+                {
+                  key: "milkFeel",
+                  label: "ミルク感",
+                  left: "あっさり",
+                  right: "ミルク感強め",
+                },
+                {
+                  key: "artificialSweetener",
+                  label: "人工甘味料感",
+                  left: "ほとんど感じない",
+                  right: "強く感じる",
+                },
+              ].map((item) => (
+                <div key={item.key} className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-[#64748B]">
+                    <span>{item.label}</span>
+                    <span className="text-[9px]">
+                      {item.left} ↔ {item.right}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    disabled={saving}
+                    value={myRating[item.key as keyof MyQuickRating] ?? 3}
+                    onChange={(e) =>
+                      setMyRating((prev) => ({
+                        ...prev,
+                        [item.key]: Number(e.target.value),
+                      }))
+                    }
+                    className="w-full accent-[#0F9E90]"
+                  />
+                </div>
+              ))}
+
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async () => {
+                  await saveQuickRating(detail.id)
+                  setIsRatingModalOpen(false)
+                }}
+                className="mt-2 inline-flex w-full items-center justify-center rounded-full bg-[#0F9E90] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#0C8A7E] disabled:opacity-60"
+              >
+                この内容で評価を送信
+              </button>
+              {saving && (
+                <p className="text-[10px] text-[#94A3B8]">保存中です...</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* フッター */}
+      <footer className="mt-12 border-t border-slate-200 bg-[#0F172A] text-slate-100">
+        <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 text-xs text-slate-300">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold tracking-[0.18em] text-teal-200">
+                PROTEIN LOG
+              </p>
+              <p className="text-[11px] text-slate-300">
+                口コミとデータで比較できるプロテイン専用レビューサービス
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3 text-[11px] text-slate-300">
+              <span>ブランド一覧</span>
+              <span>商品一覧</span>
+              <span>レビューについて</span>
+            </div>
+          </div>
+          <div className="text-[10px] text-slate-400">
+            &copy; {new Date().getFullYear()} Protein Log
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
-

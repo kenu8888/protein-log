@@ -161,6 +161,20 @@ function formatProductTitle(p: ClassifiedProtein): string {
   return result || name || manufacturer || "名称不明"
 }
 
+function formatProductUrlLabel(url: string | null): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    if (u.hostname.includes("amazon.")) return "Amazon"
+    if (u.hostname.includes("iherb.")) return "iHerb"
+    if (u.hostname.includes("rakuten.") || u.hostname.includes("rakuten.co.jp"))
+      return "楽天市場"
+    return "メーカー"
+  } catch {
+    return null
+  }
+}
+
 export default function Page() {
   const [brands, setBrands] = useState<Brand[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -467,39 +481,36 @@ export default function Page() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
-      {/* 1. フル幅ブランドバー */}
-      <header className="fixed inset-x-0 top-0 z-30 w-full bg-[#1F2A44] text-slate-50">
-        <div className="mx-auto flex h-12 max-w-5xl items-center justify-between gap-4 px-4 sm:h-14">
+      {/* 1. フル幅ブランドバー（詳細ページと同デザイン） */}
+      <header className="fixed inset-x-0 top-0 z-30 w-full bg-[#1F2A44] text-white shadow-sm">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold tracking-[0.22em]">
+            <span className="text-xs font-semibold tracking-[0.18em] text-teal-200">
               PROTEIN LOG
             </span>
+            <span className="hidden text-[11px] text-slate-200/80 sm:inline">
+              あなたに合うプロテインが見つかる
+            </span>
           </div>
-          {/* ロゴ横のキーワード検索バー（コンパクト版） */}
-          <div className="hidden flex-1 items-center justify-end sm:flex">
-            <div className="flex w-full max-w-xs items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[10px]">
-                <span className="text-xs text-slate-200">🔍</span>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value)
-                    setCurrentPage(1)
-                  }}
-                  placeholder="メーカー名・商品名・フレーバー検索"
-                className="w-full flex-1 bg-transparent text-[10px] text-slate-50 placeholder:text-slate-300 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentPage(1)
-                  }}
-                  className="whitespace-nowrap rounded-full bg-white/90 px-3 py-0.5 text-[10px] font-semibold text-[#1F2A44] hover:bg-white"
-                >
-                  検索
-                </button>
-            </div>
-          </div>
+          {/* ロゴ横のキーワード検索バー（詳細ページと同トーン） */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              setCurrentPage(1)
+            }}
+            className="hidden items-center gap-2 sm:flex"
+          >
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setCurrentPage(1)
+              }}
+              placeholder="メーカー名・商品名・フレーバー検索"
+              className="h-8 w-48 rounded-full border border-slate-500/60 bg-[#0F172A] px-3 text-[11px] text-slate-50 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none"
+            />
+          </form>
         </div>
       </header>
 
@@ -548,15 +559,18 @@ export default function Page() {
                   <span className="text-slate-400">件</span>
                 </div>
               )}
-              {manufacturerCount != null && (
-                <div className="inline-flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 text-[10px] text-slate-700 ring-1 ring-slate-200/80">
-                  <span className="text-slate-500">登録メーカー</span>
-                  <span className="text-xs font-semibold text-slate-900">
-                    {manufacturerCount.toLocaleString()}
-                  </span>
-                  <span className="text-slate-400">社</span>
-                </div>
-              )}
+            {manufacturerCount != null && (
+              <Link
+                href="/manufacturers"
+                className="inline-flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 text-[10px] text-slate-700 ring-1 ring-slate-200/80 hover:bg-white"
+              >
+                <span className="text-slate-500">登録メーカー</span>
+                <span className="text-xs font-semibold text-slate-900">
+                  {manufacturerCount.toLocaleString()}
+                </span>
+                <span className="text-slate-400">社</span>
+              </Link>
+            )}
             </div>
             {lastUpdatedLabel && (
               <p className="mt-1 text-[9px] text-slate-400">
@@ -799,7 +813,7 @@ export default function Page() {
                           />
                         </div>
                       )}
-                      <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-stretch sm:justify-between">
+                      <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-stretch sm:justify-between sm:gap-4">
                         {/* 左: メーカー / 商品名 / フレーバー / レーティング */}
                         <div className="flex-1 space-y-0.5">
                           {/* 上段: テキスト（左）と価格（右）を横並びに（モバイル時） */}
@@ -836,9 +850,10 @@ export default function Page() {
                           {/* ここでは一律で星表示をオフにする */}
                         </div>
 
-                        {/* 右: 価格とフレーバーカテゴリ（PCでは横並び） */}
-                        <div className="mt-2 hidden w-full flex-col gap-1 border-t border-gray-100 pt-2 text-[10px] text-gray-600 sm:mt-0 sm:flex sm:w-56 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
-                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                        {/* 中央右: 価格・販売サイトタグ・フレーバーカテゴリ（PCでは横並び） */}
+                        <div className="mt-2 hidden w-full flex-col gap-1 border-t border-gray-100 pt-2 text-[10px] text-gray-600 sm:mt-0 sm:flex sm:w-64 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                            {/* 価格 */}
                             {p.price_per_kg != null ? (
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-1">
@@ -856,7 +871,7 @@ export default function Page() {
                                     </span>
                                   )}
                                 </div>
-                                <span className="text-xl font-semibold text-gray-900 leading-snug">
+                                <span className="text-xl font-semibold leading-snug text-gray-900">
                                   ¥{Math.round(p.price_per_kg).toLocaleString()}
                                 </span>
                               </div>
@@ -867,29 +882,78 @@ export default function Page() {
                             ) : (
                               <p className="text-[11px] text-gray-400">—</p>
                             )}
-                            {p.flavor_category && (
-                              <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5">
-                                <span className="text-[9px] text-gray-600">
-                                  {p.flavor_category === "choco"
-                                    ? "チョコ系"
-                                    : p.flavor_category === "coffee"
-                                    ? "コーヒー系"
-                                    : p.flavor_category === "fruit"
-                                    ? "フルーツ系"
-                                    : p.flavor_category === "milk"
-                                    ? "ミルク系"
-                                    : p.flavor_category === "sweets"
-                                    ? "お菓子系"
-                                    : p.flavor_category === "meal"
-                                    ? "食事系"
-                                    : p.flavor_category === "plain"
-                                    ? "プレーン"
-                                    : p.flavor_category === "yogurt"
-                                    ? "ヨーグルト系"
-                                    : p.flavor_category === "matcha"
-                                    ? "抹茶系"
-                                    : "その他"}
+
+                            <div className="flex flex-col items-end gap-1">
+                              {/* 販売サイトタグ */}
+                              {formatProductUrlLabel(p.product_url) && (
+                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-medium text-slate-600">
+                                  {formatProductUrlLabel(p.product_url)}
                                 </span>
+                              )}
+                              {/* フレーバーカテゴリ */}
+                              {p.flavor_category && (
+                                <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5">
+                                  <span className="text-[9px] text-gray-600">
+                                    {p.flavor_category === "choco"
+                                      ? "チョコ系"
+                                      : p.flavor_category === "coffee"
+                                      ? "コーヒー系"
+                                      : p.flavor_category === "fruit"
+                                      ? "フルーツ系"
+                                      : p.flavor_category === "milk"
+                                      ? "ミルク系"
+                                      : p.flavor_category === "sweets"
+                                      ? "お菓子系"
+                                      : p.flavor_category === "meal"
+                                      ? "食事系"
+                                      : p.flavor_category === "plain"
+                                      ? "プレーン"
+                                      : p.flavor_category === "yogurt"
+                                      ? "ヨーグルト系"
+                                      : p.flavor_category === "matcha"
+                                      ? "抹茶系"
+                                      : "その他"}
+                                  </span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 一番右: 星マークの評価ゾーン（クリーンなバッジデザイン） */}
+                        <div className="mt-2 flex items-center justify-end sm:mt-0 sm:w-32">
+                          <div className="inline-flex min-w-[92px] flex-col items-end justify-center gap-1 rounded-xl bg-white/80 px-3 py-2 text-[10px] text-slate-800 ring-1 ring-slate-200 shadow-sm">
+                            {p.avg_rating != null ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#1F2A44] text-[11px] font-semibold text-white">
+                                    {p.avg_rating.toFixed(1)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500">
+                                    / 5.0
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-0.5 text-[11px]">
+                                  {Array.from({ length: 5 }).map((_, i) => {
+                                    const filled = i < Math.round(p.avg_rating ?? 0)
+                                    return (
+                                      <span
+                                        key={i}
+                                        className={
+                                          filled
+                                            ? "text-amber-400 drop-shadow-[0_0_2px_rgba(251,191,36,0.6)]"
+                                            : "text-slate-300"
+                                        }
+                                      >
+                                        ★
+                                      </span>
+                                    )
+                                  })}
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-slate-400">
+                                評価データなし
                               </span>
                             )}
                           </div>
@@ -1117,54 +1181,26 @@ export default function Page() {
         </section>
       </main>
 
-      {/* フッター */}
-      <footer className="mt-10 border-t border-slate-200 bg-slate-50/80">
-        <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-8 text-[11px] text-slate-600 sm:flex-row sm:justify-between">
-          <div className="space-y-3">
+      {/* フッター（詳細ページと同デザイン） */}
+      <footer className="mt-12 border-t border-slate-200 bg-[#0F172A] text-slate-100">
+        <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 text-xs text-slate-300">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
-              <div className="text-xs font-semibold tracking-[0.18em] text-[#1F2A44]">
+              <p className="text-[11px] font-semibold tracking-[0.18em] text-teal-200">
                 PROTEIN LOG
-              </div>
-              <p className="max-w-xs text-[11px] text-slate-500">
-                口コミとデータから、あなたに合う一杯を見つけるプロテイン比較・口コミサービスです。
+              </p>
+              <p className="text-[11px] text-slate-300">
+                口コミとデータで比較できるプロテイン専用レビューサービス
               </p>
             </div>
-            <div className="flex flex-wrap gap-3 text-[10px] text-slate-400">
-              <span>味・甘さ・溶けやすさ・コスパで比較</span>
-              <span>毎日自動更新</span>
+            <div className="flex flex-wrap gap-3 text-[11px] text-slate-300">
+              <span>ブランド一覧</span>
+              <span>商品一覧</span>
+              <span>レビューについて</span>
             </div>
           </div>
-
-          <div className="grid grid-cols-2 gap-4 text-[11px] sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <p className="text-[11px] font-semibold text-slate-700">探す</p>
-              <div className="space-y-1 text-slate-500">
-                <Link href="#search" className="block hover:text-slate-800">
-                  プロテインを検索
-                </Link>
-                <span className="block text-slate-400">条件から探す（準備中）</span>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <p className="text-[11px] font-semibold text-slate-700">コンテンツ</p>
-              <div className="space-y-1 text-slate-500">
-                <span className="block text-slate-400">ブランド一覧（準備中）</span>
-                <span className="block text-slate-400">レビューガイド（準備中）</span>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <p className="text-[11px] font-semibold text-slate-700">運営情報</p>
-              <div className="space-y-1 text-slate-500">
-                <span className="block text-slate-400">利用規約（準備中）</span>
-                <span className="block text-slate-400">プライバシーポリシー（準備中）</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="border-t border-slate-200 bg-slate-50/90">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 text-[10px] text-slate-400">
-            <span>© {new Date().getFullYear()} Protein Log.</span>
-            <span>All rights reserved.</span>
+          <div className="text-[10px] text-slate-400">
+            &copy; {new Date().getFullYear()} Protein Log
           </div>
         </div>
       </footer>
