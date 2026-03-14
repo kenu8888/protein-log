@@ -84,8 +84,12 @@ export async function saveClassificationResult(
   let scrapedPriceValue: number | null = null;
   let scrapedPricePerKg: number | null = null;
   let isInStock: boolean | null = null;
+  let scrapedCalories: number | null = null;
+  let scrapedProteinG: number | null = null;
+  let scrapedCarbs: number | null = null;
+  let scrapedFat: number | null = null;
 
-  // Amazon 由来: scraped_products を優先
+  // Amazon 由来: scraped_products を優先（価格・画像・在庫・栄養は取得元で補完）
   if (
     sourceRow?.source_name === "amazon" &&
     typeof sourceRow.source_key === "string" &&
@@ -95,7 +99,9 @@ export async function saveClassificationResult(
     if (asin) {
       const { data: sp, error: spError } = await client
         .from("scraped_products")
-        .select("image_url, price_value, net_weight_kg, price_per_kg, is_available")
+        .select(
+          "image_url, price_value, net_weight_kg, price_per_kg, is_available, calories, protein_g, carbs_g, fat_g"
+        )
         .eq("asin", asin)
         .maybeSingle();
       if (spError) {
@@ -115,6 +121,18 @@ export async function saveClassificationResult(
         }
         if (typeof sp.is_available === "boolean") {
           isInStock = sp.is_available as boolean;
+        }
+        if (typeof (sp as any).calories === "number") {
+          scrapedCalories = (sp as any).calories as number;
+        }
+        if (typeof (sp as any).protein_g === "number") {
+          scrapedProteinG = (sp as any).protein_g as number;
+        }
+        if (typeof (sp as any).carbs_g === "number") {
+          scrapedCarbs = (sp as any).carbs_g as number;
+        }
+        if (typeof (sp as any).fat_g === "number") {
+          scrapedFat = (sp as any).fat_g as number;
         }
       }
     }
@@ -159,6 +177,35 @@ export async function saveClassificationResult(
     }
   }
 
+  // 楽天由来: rakuten_products から価格・画像を補完
+  if (
+    sourceRow?.source_name === "rakuten" &&
+    typeof sourceRow.source_key === "string" &&
+    sourceRow.source_key.startsWith("rakuten:")
+  ) {
+    const itemCode = sourceRow.source_key.split(":")[1];
+    if (itemCode) {
+      const { data: rp, error: rpError } = await client
+        .from("rakuten_products")
+        .select("price_value, image_url")
+        .eq("item_code", itemCode)
+        .maybeSingle();
+      if (rpError) {
+        console.error(
+          `saveClassificationResult: failed to fetch rakuten_products for item_code=${itemCode}:`,
+          rpError
+        );
+      } else if (rp) {
+        if (typeof rp.price_value === "number") {
+          scrapedPriceValue = scrapedPriceValue ?? (rp.price_value as number);
+        }
+        if (rp.image_url && !productImageUrl) {
+          productImageUrl = rp.image_url as string;
+        }
+      }
+    }
+  }
+
   const row = {
     source_text_id: sourceTextId,
     is_protein_powder: result.is_protein_powder,
@@ -169,10 +216,11 @@ export async function saveClassificationResult(
     // Amazon の場合は scraped_products の数値価格を最優先で使う
     price_jpy:
       scrapedPriceValue != null ? scrapedPriceValue : result.price_jpy,
-    protein_grams_per_serving: result.protein_grams_per_serving,
-    calories: result.calories,
-    carbs: result.carbs,
-    fat: result.fat,
+    protein_grams_per_serving:
+      scrapedProteinG ?? result.protein_grams_per_serving,
+    calories: scrapedCalories ?? result.calories,
+    carbs: scrapedCarbs ?? result.carbs,
+    fat: scrapedFat ?? result.fat,
     avg_rating: result.avg_rating,
     // 優先度: Amazon/メーカー由来の price_per_kg > LLM の推測値
     price_per_kg: scrapedPricePerKg ?? result.price_per_kg,

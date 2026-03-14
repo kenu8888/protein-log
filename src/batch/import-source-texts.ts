@@ -24,17 +24,23 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey)
 
 function buildRawTextFromAmazon(row: any) {
-  return [
+  const lines = [
     "【Amazon】",
     row.brand ? `ブランド: ${row.brand}` : null,
+    row.manufacturer ? `メーカー: ${row.manufacturer}` : null,
     row.title ? `商品名: ${row.title}` : null,
+    row.flavor ? `フレーバー: ${row.flavor}` : null,
     row.price ? `価格: ${row.price}` : null,
     row.rating != null ? `評価: ${row.rating}` : null,
+    row.calories != null ? `カロリー: ${row.calories}kcal` : null,
+    row.protein_g != null ? `タンパク質: ${row.protein_g}g` : null,
+    row.carbs_g != null ? `炭水化物: ${row.carbs_g}g` : null,
+    row.fat_g != null ? `脂質: ${row.fat_g}g` : null,
     row.asin ? `ASIN: ${row.asin}` : null,
-    row.source_url ? `URL: ${row.source_url}` : null
+    row.source_url ? `URL: ${row.source_url}` : null,
+    row.nutrition_raw_text ? `[栄養成分]\n${row.nutrition_raw_text}` : null
   ]
-    .filter(Boolean)
-    .join("\n")
+  return lines.filter(Boolean).join("\n")
 }
 
 function buildRawTextFromManufacturer(row: any) {
@@ -53,12 +59,43 @@ function buildRawTextFromManufacturer(row: any) {
     .join("\n")
 }
 
+function buildRawTextFromRakuten(row: any) {
+  return [
+    "【楽天】",
+    row.shop_name ? `ショップ: ${row.shop_name}` : null,
+    row.title ? `商品名: ${row.title}` : null,
+    row.price ? `価格: ${row.price}` : null,
+    row.price_value != null ? `価格(円): ${row.price_value}` : null,
+    row.item_code ? `商品コード: ${row.item_code}` : null,
+    row.source_url ? `URL: ${row.source_url}` : null
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
 async function importAmazon(limit: number) {
-  const { data, error } = await supabase
+  const extendedSelect =
+    "asin, title, brand, price, rating, source_url, manufacturer, flavor, calories, protein_g, carbs_g, fat_g, nutrition_raw_text"
+  let data: any[] | null = null
+  let error: { message: string } | null = null
+
+  const res = await supabase
     .from("scraped_products")
-    .select("asin, title, brand, price, rating, source_url")
+    .select(extendedSelect)
     .order("updated_at", { ascending: false })
     .limit(limit)
+  data = res.data ?? null
+  error = res.error
+
+  if (error && /column.*does not exist|42703/i.test(error.message)) {
+    const fallback = await supabase
+      .from("scraped_products")
+      .select("asin, title, brand, price, rating, source_url")
+      .order("updated_at", { ascending: false })
+      .limit(limit)
+    data = fallback.data ?? null
+    error = fallback.error
+  }
 
   if (error) throw new Error(`scraped_products fetch failed: ${error.message}`)
 
@@ -113,11 +150,40 @@ async function importManufacturer(limit: number) {
   return rows.length
 }
 
+async function importRakuten(limit: number) {
+  const { data, error } = await supabase
+    .from("rakuten_products")
+    .select("item_code, title, shop_name, price, price_value, source_url")
+    .order("updated_at", { ascending: false })
+    .limit(limit)
+
+  if (error) throw new Error(`rakuten_products fetch failed: ${error.message}`)
+
+  const records = (data ?? []).filter((r: any) => !!r.item_code)
+  if (records.length === 0) return 0
+
+  const rows = records.map((r: any) => ({
+    source_name: "rakuten",
+    source_url: r.source_url ?? null,
+    source_key: `rakuten:${r.item_code}`,
+    raw_text: buildRawTextFromRakuten(r)
+  }))
+
+  const { error: upsertError } = await supabase
+    .from("protein_source_texts")
+    .upsert(rows as any, { onConflict: "source_key" })
+
+  if (upsertError)
+    throw new Error(`rakuten import failed: ${upsertError.message}`)
+  return rows.length
+}
+
 async function main() {
   const limit = Number(process.env.IMPORT_LIMIT ?? "500")
 
   const amazonCount = await importAmazon(limit)
   const manufacturerCount = await importManufacturer(limit)
+  const rakutenCount = await importRakuten(limit)
 
   console.log(
     JSON.stringify(
@@ -125,6 +191,7 @@ async function main() {
         message: "Import finished",
         amazon: amazonCount,
         manufacturer: manufacturerCount,
+        rakuten: rakutenCount,
         limit
       },
       null,

@@ -1,0 +1,49 @@
+# 毎日深夜（JST 3:00）に Amazon 取得 → import → classify を実行する。
+# Secrets に以下を登録すること:
+#   SUPABASE_URL または NEXT_PUBLIC_SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#   APP_URL … Next アプリの URL（例: https://your-app.vercel.app）。import/classify を叩く先。
+
+name: Amazon nightly sync
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # 毎日 18:00 UTC = 翌日 3:00 JST
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: python3 -m pip install playwright supabase python-dotenv
+
+      - name: Install Chromium
+        run: python3 -m playwright install chromium --with-deps
+
+      - name: Run Amazon sync (headless)
+        run: >
+          python3 app/api/amazon_product_sync.py
+          "プロテインパウダー" 5 50 1
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Import (scraped_products → source_texts)
+        run: |
+          curl -sS -X POST "${{ secrets.APP_URL }}/api/source-texts/import" \
+            -H "Content-Type: application/json" \
+            -d '{"targets":["amazon"],"limit":500}'
+
+      - name: Classify (pending → AI)
+        run: |
+          curl -sS -X POST "${{ secrets.APP_URL }}/api/batch/classify" \
+            -H "Content-Type: application/json" \
+            -d '{"limit":150}'

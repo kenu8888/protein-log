@@ -101,7 +101,29 @@ function parseAvailabilityFromAny(av: any): {
   return { raw, isAvailable: null }
 }
 
-async function fetchAmazonProduct(asin: string) {
+type AmazonProductResult = {
+  title?: string
+  brand?: string
+  main_image?: string
+  variants?: Array<{
+    title?: string
+    items?: Array<{
+      asin?: string
+      name?: string
+      link?: string
+      serpapi_link?: string
+    }>
+  }>
+  price?: any
+  prices?: any
+  offer?: any
+  offers?: any
+  availability?: any
+  availability_status?: any
+  in_stock?: any
+}
+
+async function fetchAmazonProduct(asin: string): Promise<AmazonProductResult | null> {
   const params = new URLSearchParams({
     engine: "amazon_product",
     amazon_domain: "amazon.co.jp",
@@ -124,7 +146,7 @@ async function fetchAmazonProduct(asin: string) {
   }
 
   const json: any = await res.json()
-  return json.product_results
+  return (json.product_results ?? null) as AmazonProductResult | null
 }
 
 async function backfillFromAmazonProduct(limit: number) {
@@ -154,6 +176,18 @@ async function backfillFromAmazonProduct(limit: number) {
     is_available?: boolean | null
   }[] = []
 
+  // 1ページ内のフレーバーバリエーションなどから新しい ASIN を見つけた場合に upsert するための配列
+  const newVariantRows: {
+    asin: string
+    title: string
+    brand: string
+    image_url: string
+    price: string | null
+    price_value: number | null
+    rating: number | null
+    source_url: string
+  }[] = []
+
   for (const row of rows) {
     const asin = row.asin
     if (!asin) continue
@@ -163,10 +197,15 @@ async function backfillFromAmazonProduct(limit: number) {
       if (!product) continue
 
       const { raw, value } = parsePriceFromAny(
-        product.price ?? product.prices ?? product.offer ?? product.offers
+        (product as any).price ??
+          (product as any).prices ??
+          (product as any).offer ??
+          (product as any).offers
       )
       const availabilityInfo = parseAvailabilityFromAny(
-        product.availability ?? product.availability_status ?? product.in_stock
+        (product as any).availability ??
+          (product as any).availability_status ??
+          (product as any).in_stock
       )
 
       // 売り切れなどで価格が取れない場合も、在庫情報だけは保存しておく
@@ -180,25 +219,89 @@ async function backfillFromAmazonProduct(limit: number) {
             availabilityInfo.isAvailable ?? row.is_available ?? null,
         })
       }
+
+      // バリエーション情報（カルーセルの別フレーバーなど）から追加の ASIN を拾う
+      const variants = (product as any).variants as
+        | AmazonProductResult["variants"]
+        | undefined
+
+      if (variants && Array.isArray(variants)) {
+        for (const group of variants) {
+          if (!group?.items || !Array.isArray(group.items)) continue
+
+          for (const item of group.items) {
+            const variantAsin = item?.asin
+            if (!variantAsin) continue
+
+            // 既に scraped_products にある ASIN は除外（このバッチ対象にも含まれる可能性がある）
+            if (rows.some((r) => r.asin === variantAsin)) continue
+
+            const title =
+              item.name ||
+              (group.title
+                ? `${product.title ?? ""} ${group.title}`.trim()
+                : product.title ?? "") ||
+              ""
+
+            if (!title) continue
+
+            // バリアントの詳細ページ URL（なければ ASIN から推定）
+            const link =
+              (item as any).link ||
+              (product as any).link ||
+              `https://www.amazon.co.jp/dp/${variantAsin}`
+
+            newVariantRows.push({
+              asin: variantAsin,
+              title,
+              brand: product.brand ?? "",
+              image_url: product.main_image ?? "",
+              price: null,
+              price_value: null,
+              rating: null,
+              source_url: link,
+            })
+          }
+        }
+      }
     } catch (e) {
       console.error(`failed to fetch details for asin=${asin}`, e)
       continue
     }
   }
 
-  if (updates.length === 0) {
-    console.log("No updates to apply from amazon_product.")
+  if (updates.length === 0 && newVariantRows.length === 0) {
+    console.log("No updates or new variants to apply from amazon_product.")
     return
   }
 
-  const { error: upsertError } = await supabase
-    .from("scraped_products")
-    .upsert(updates, { onConflict: "id" })
+  if (updates.length > 0) {
+    const { error: upsertError } = await supabase
+      .from("scraped_products")
+      .upsert(updates, { onConflict: "id" })
 
-  if (upsertError) {
-    throw new Error(
-      `backfill amazon_product upsert failed: ${upsertError.message}`
+    if (upsertError) {
+      throw new Error(
+        `backfill amazon_product upsert failed: ${upsertError.message}`
+      )
+    }
+  }
+
+  if (newVariantRows.length > 0) {
+    // ASIN ごとに 1 レコードにまとめてから upsert
+    const uniqueVariants = Array.from(
+      new Map(newVariantRows.map((v) => [v.asin, v])).values()
     )
+
+    const { error: variantError } = await supabase
+      .from("scraped_products")
+      .upsert(uniqueVariants, { onConflict: "asin" })
+
+    if (variantError) {
+      throw new Error(
+        `backfill amazon_product variant upsert failed: ${variantError.message}`
+      )
+    }
   }
 
   console.log(
@@ -206,6 +309,7 @@ async function backfillFromAmazonProduct(limit: number) {
       {
         message: "backfill amazon product details completed",
         updated: updates.length,
+        new_variants: newVariantRows.length,
       },
       null,
       2

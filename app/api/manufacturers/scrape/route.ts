@@ -484,16 +484,40 @@ function parseMyproteinPage(html: string, src: ManufacturerSource): ParsedProduc
   const raw_product_name = productTitle
 
   // フレーバー:
-  // 1. フレーバー用セレクトボックスで selected な option のテキスト
-  // 2. なければ商品名テキストからキーワード抽出
-  const selectedFlavorOption = $("select.elements-variations-dropdown option[selected]")
-    .first()
-    .text()
-    .replace(/\s+/g, " ")
-    .trim()
-  const flavorFromSelect = selectedFlavorOption || null
+  // - フレーバー用セレクトボックスの全 option から、プレースホルダを除いた一覧を取得
+  // - なければ商品名テキストからキーワード抽出し、単一フレーバーとして扱う
+  const allFlavorOptions = $(
+    "select.elements-variations-dropdown option"
+  )
+    .map((_, el) =>
+      $(el)
+        .text()
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .get()
+    .filter((text: string) => {
+      if (!text) return false
+      // 「フレーバーを選択」「お選びください」などのプレースホルダを除外
+      const lower = text.toLowerCase()
+      if (
+        /select|choose|選択|お選びください/.test(lower) ||
+        text === "-"
+      ) {
+        return false
+      }
+      return true
+    })
+
   const flavorFromText = extractFlavorFromText(raw_product_name)
-  const flavor = flavorFromSelect || flavorFromText || null
+
+  // フレーバー候補リスト（プルダウンがあればその全件、なければテキスト由来の 1 件）
+  const flavorCandidates: (string | null)[] =
+    allFlavorOptions.length > 0
+      ? Array.from(new Set(allFlavorOptions))
+      : flavorFromText
+      ? [flavorFromText]
+      : [null]
 
   // 容量: Amount バリエーションボタンのうち aria-checked="true" のもの
   const amountBtn = $('button[data-option="Amount"][aria-checked="true"]').first()
@@ -557,11 +581,218 @@ function parseMyproteinPage(html: string, src: ManufacturerSource): ParsedProduc
       ? Math.round((priceInfo.price_yen / unitInfo.unit_kg) * 10) / 10
       : null
 
+  // フレーバーごとに 1 レコードずつ展開して登録する
+  for (const flavor of flavorCandidates) {
+    candidates.push({
+      manufacturer_name: src.manufacturer_name,
+      manufacturer_code: src.manufacturer_code,
+      product_name: raw_product_name,
+      flavor,
+      unit_text: unitInfo.unit_text,
+      unit_kg: unitInfo.unit_kg,
+      price_text: priceInfo.price_text,
+      price_yen: priceInfo.price_yen,
+      price_per_kg,
+      image_url,
+      source_url: src.url,
+      raw_product_name,
+      raw_flavor: flavor ?? flavorFromText ?? null,
+      raw_unit_text: unitSourceText || null,
+      raw_price_text: priceSourceText || null
+    })
+  }
+
+  return candidates
+}
+
+// 同一オリジンで商品詳細っぽい a[href] を HTML から収集（一覧・AJAX レスポンス共通）
+function collectProductLinksFromHtml(html: string, listPageUrl: string, base: URL): Set<string> {
+  const $ = load(html)
+  const seen = new Set<string>()
+  const addLink = (href: string) => {
+    if (!href || href.startsWith("#")) return
+    try {
+      const url = new URL(href, listPageUrl)
+      if (url.origin !== base.origin) return
+      const path = url.pathname.replace(/\/$/, "")
+      if (!path || path === "/" || path === "/product_protein") return
+      if (/\/cart\/|\/checkout\/|\/mypage\/|\.(pdf|jpg|png)$/i.test(path)) return
+      seen.add(url.toString())
+    } catch {
+      /* ignore */
+    }
+  }
+  $("a[href]").each((_, el) => {
+    addLink($(el).attr("href") ?? "")
+  })
+  return seen
+}
+
+// MY ROUTINE 一覧ページの「もっと見る」用: admin-ajax.php のパラメータを HTML から推測
+// .entry-more の data-* やインラインスクリプト内の action / nonce を探す
+function extractMyroutineAjaxParams(html: string): { action: string; nonce: string; catid: string } | null {
+  const $ = load(html)
+  const entryMore = $(".entry-more").first()
+  const action =
+    entryMore.attr("data-action") ??
+    entryMore.attr("data-ajax-action") ??
+    ""
+  const nonce =
+    entryMore.attr("data-nonce") ??
+    entryMore.attr("data-security") ??
+    ""
+  const catid = entryMore.attr("data-catid") ?? ""
+
+  if (!action) {
+    const scriptText = $("script").toArray().map((el) => $(el).html() ?? "").join(" ")
+    const actionMatch = scriptText.match(/action\s*[:=]\s*['"]([^'"]+)['"]/) ?? scriptText.match(/['"](load_more|ajax_load_more|get_posts)['"]/)
+    const nonceMatch = scriptText.match(/nonce\s*[:=]\s*['"]([^'"]+)['"]/) ?? scriptText.match(/security\s*[:=]\s*['"]([^'"]+)['"]/)
+    const foundAction = actionMatch ? (actionMatch[1] ?? "") : ""
+    const foundNonce = nonceMatch ? (nonceMatch[1] ?? "") : ""
+    if (foundAction) {
+      return { action: foundAction, nonce: foundNonce, catid }
+    }
+    return null
+  }
+  return { action, nonce, catid }
+}
+
+// MY ROUTINE「もっと見る」: admin-ajax.php に offset を渡して追加 HTML を取得
+// 実サイトの Payload: action=get_gellery_items, offset_post_num=36, post_cat_id=
+async function fetchMyroutineAjaxChunk(
+  listPageUrl: string,
+  offset: number,
+  params: { action: string; nonce: string; catid: string }
+): Promise<string> {
+  const base = new URL(listPageUrl)
+  const ajaxUrl = `${base.origin}/wp-admin/admin-ajax.php`
+  const body = new URLSearchParams()
+  body.set("action", params.action)
+  body.set("offset_post_num", String(offset))
+  body.set("post_cat_id", params.catid ?? "")
+  if (params.nonce) body.set("nonce", params.nonce)
+
+  const res = await fetch(ajaxUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      Referer: listPageUrl
+    },
+    body: body.toString()
+  })
+  if (!res.ok) return ""
+  return res.text()
+}
+
+// MY ROUTINE 一覧ページから商品詳細URLを抽出（初期HTML + admin-ajax で「もっと見る」分も取得）
+// - 実サイト: action=get_gellery_items, offset_post_num=36,72,... post_cat_id= で admin-ajax.php を叩く
+async function parseMyroutineListPage(html: string, listPageUrl: string): Promise<string[]> {
+  const base = new URL(listPageUrl)
+  const seen = collectProductLinksFromHtml(html, listPageUrl, base)
+
+  let params = extractMyroutineAjaxParams(html)
+  if (!params?.action && /myroutine\.jp/i.test(listPageUrl)) {
+    params = { action: "get_gellery_items", nonce: "", catid: "" }
+  }
+  if (params?.action) {
+    const OFFSET_STEP = 36
+    const MAX_CHUNKS = 15
+    for (let chunk = 1; chunk <= MAX_CHUNKS; chunk++) {
+      const offset = chunk * OFFSET_STEP
+      const chunkHtml = await fetchMyroutineAjaxChunk(listPageUrl, offset, params)
+      if (!chunkHtml || chunkHtml.trim().length < 50) break
+      const before = seen.size
+      const chunkLinks = collectProductLinksFromHtml(chunkHtml, listPageUrl, base)
+      chunkLinks.forEach((u) => seen.add(u))
+      if (chunkLinks.size === 0 || seen.size === before) break
+      await sleep(randomDelay())
+    }
+  }
+
+  return Array.from(seen)
+}
+
+// MY ROUTINE 専用パーサー（1商品の詳細ページ用）
+// - manufacturer_sources.manufacturer_code = 'myroutine' を想定
+// - 商品詳細ページの .bottom_area 内にある価格ブロックから価格を取得する
+function parseMyroutinePage(html: string, src: ManufacturerSource): ParsedProduct[] {
+  const $ = load(html)
+  const candidates: ParsedProduct[] = []
+
+  // タイトル（h1 または .product_title 相当）を取得
+  const titleText =
+    $("h1")
+      .first()
+      .text()
+      .replace(/\s+/g, " ")
+      .trim() ||
+    $(".product_title, .title")
+      .first()
+      .text()
+      .replace(/\s+/g, " ")
+      .trim()
+
+  if (!titleText) {
+    return []
+  }
+
+  const raw_product_name = titleText
+
+  // フレーバーはタイトルから推定（ストロベリーなど）
+  const flavorFromText = extractFlavorFromText(raw_product_name)
+
+  // 容量はタイトル内の「1050g」などから推定
+  const unitInfo = parseUnit(raw_product_name)
+
+  // 価格: .bottom_area .price のテキスト（例: 「￥4,280（税込）」）
+  const priceBlockText = $(".bottom_area .price")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const priceInfo = parsePrice(priceBlockText)
+
+  // 画像は og:image を優先し、なければページ内の代表画像を探す
+  let image_url: string | null = null
+  const ogImg =
+    $('meta[property="og:image"]').attr("content") ??
+    $('meta[name="og:image"]').attr("content") ??
+    ""
+
+  if (ogImg) {
+    try {
+      image_url = new URL(ogImg, src.url).toString()
+    } catch {
+      image_url = ogImg
+    }
+  } else {
+    const imgEl = $("main img, .product img, img").first()
+    const imgSrc =
+      imgEl.attr("data-src") ??
+      imgEl.attr("data-original") ??
+      imgEl.attr("src") ??
+      ""
+    if (imgSrc) {
+      try {
+        image_url = new URL(imgSrc, src.url).toString()
+      } catch {
+        image_url = imgSrc
+      }
+    }
+  }
+
+  const price_per_kg =
+    priceInfo.price_yen && unitInfo.unit_kg
+      ? Math.round((priceInfo.price_yen / unitInfo.unit_kg) * 10) / 10
+      : null
+
   candidates.push({
     manufacturer_name: src.manufacturer_name,
     manufacturer_code: src.manufacturer_code,
     product_name: raw_product_name,
-    flavor,
+    flavor: flavorFromText,
     unit_text: unitInfo.unit_text,
     unit_kg: unitInfo.unit_kg,
     price_text: priceInfo.price_text,
@@ -571,14 +802,46 @@ function parseMyproteinPage(html: string, src: ManufacturerSource): ParsedProduc
     source_url: src.url,
     raw_product_name,
     raw_flavor: flavorFromText ?? null,
-    raw_unit_text: unitSourceText || null,
-    raw_price_text: priceSourceText || null
+    raw_unit_text: unitInfo.unit_text ?? null,
+    raw_price_text: priceBlockText || null
   })
 
   return candidates
 }
 
-export async function POST() {
+async function runImportAndClassify(origin: string): Promise<{ importOk: boolean; classifyOk: boolean }> {
+  let importOk = false
+  let classifyOk = false
+  try {
+    const importRes = await fetch(`${origin}/api/source-texts/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets: ["manufacturer"] })
+    })
+    importOk = importRes.ok
+    if (!importRes.ok) {
+      console.error("Import after scrape failed", await importRes.text())
+    }
+  } catch (e) {
+    console.error("Import after scrape failed", e)
+  }
+  try {
+    const classifyRes = await fetch(`${origin}/api/batch/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 150 })
+    })
+    classifyOk = classifyRes.ok
+    if (!classifyRes.ok) {
+      console.error("Classify after scrape failed", await classifyRes.text())
+    }
+  } catch (e) {
+    console.error("Classify after scrape failed", e)
+  }
+  return { importOk, classifyOk }
+}
+
+export async function POST(req: Request) {
   const { data: sources, error } = await supabase
     .from("manufacturer_sources")
     .select("id, manufacturer_name, url, manufacturer_code")
@@ -620,6 +883,34 @@ export async function POST() {
 
       if (code === "myprotein") {
         parsed = parseMyproteinPage(html, src)
+      } else if (code === "myroutine") {
+        const isListPage = /product_protein\/?$/i.test(new URL(src.url).pathname.replace(/\/$/, ""))
+        if (isListPage) {
+          const detailUrls = await parseMyroutineListPage(html, src.url)
+          const MAX_DETAIL = 80
+          for (let i = 0; i < Math.min(detailUrls.length, MAX_DETAIL); i++) {
+            try {
+              const res = await fetch(detailUrls[i], {
+                headers: {
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                }
+              })
+              if (!res.ok) continue
+              const detailHtml = await res.text()
+              const one = parseMyroutinePage(detailHtml, {
+                ...src,
+                url: detailUrls[i]
+              })
+              if (one.length > 0) parsed.push(...one)
+              await sleep(randomDelay())
+            } catch (e) {
+              console.error(`myroutine detail fetch failed: ${detailUrls[i]}`, e)
+            }
+          }
+        } else {
+          parsed = parseMyroutinePage(html, src)
+        }
       } else {
         parsed = parseManufacturerPage(
           html,
@@ -710,6 +1001,8 @@ export async function POST() {
           { status: 500 }
         )
       }
+      const origin = new URL(req.url).origin
+      const refresh = await runImportAndClassify(origin)
       return NextResponse.json(
         {
           message:
@@ -717,7 +1010,10 @@ export async function POST() {
           total_products: allParsed.length,
           manufacturers: Array.from(
             new Set(allParsed.map((p) => p.manufacturer_name))
-          ).length
+          ).length,
+          ...(refresh.importOk && refresh.classifyOk
+            ? { reflected: true, note: "一覧反映用の取り込み・分類も実行済みです。画面を再読み込みしてください。" }
+            : { reflected: false, note: "一覧反映は手動で npm run batch:import-and-classify を実行してください。" })
         },
         { status: 200 }
       )
@@ -732,14 +1028,20 @@ export async function POST() {
     )
   }
 
+  const origin = new URL(req.url).origin
+  const refresh = await runImportAndClassify(origin)
+
   return NextResponse.json(
     {
       message:
         "メーカーサイトからの商品情報を保存しました。同一キーは価格など上書き、新規は first_seen_at で判別できます。",
-          total_products: uniqueRows.length,
+      total_products: uniqueRows.length,
       manufacturers: Array.from(
         new Set(uniqueRows.map((p) => p.manufacturer_name))
-      ).length
+      ).length,
+      ...(refresh.importOk && refresh.classifyOk
+        ? { reflected: true, note: "一覧反映用の取り込み・分類も実行済みです。画面を再読み込みしてください。" }
+        : { reflected: false, note: "一覧反映は手動で npm run batch:import-and-classify を実行してください。" })
     },
     { status: 200 }
   )
