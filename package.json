@@ -12,11 +12,16 @@
     "batch:import-and-classify": "npm run batch:import && npm run batch:classify",
     "batch:backfill-amazon-prices": "tsx src/batch/backfill-amazon-weight.ts",
     "batch:backfill-embeddings": "tsx src/batch/backfill-embeddings.ts",
+    "batch:amazon-sync": "python3 app/api/amazon_product_sync.py プロテインパウダー 2 20 1",
+    "batch:full-sync": "python3 app/api/amazon_product_sync.py full 100 1 0",
+    "batch:full-sync-ai": "python3 app/api/amazon_product_sync.py full 100 1 1",
+    "batch:check-sync-result": "python3 app/api/check_sync_result.py",
+    "batch:check-myprotein-ai-result": "tsx scripts/check-myprotein-ai-result.ts",
     "batch:fetch-amazon-details": "tsx src/batch/fetch-amazon-product-details.ts",
     "batch:scrape-iherb": "tsx src/batch/scrape-iherb.ts",
     "batch:enrich-myprotein-nutrition": "tsx src/batch/enrich-myprotein-nutrition.ts",
-    "daily:scrape": "curl -X POST http://localhost:3000/api/scrape-protein && curl -X POST http://localhost:3000/api/manufacturers/scrape",
-    "daily:full": "npm run daily:scrape && npm run batch:scrape-iherb && npm run batch:fetch-amazon-details && npm run batch:backfill-amazon-prices && npm run batch:import-and-classify"
+    "daily:scrape": "npm run batch:amazon-sync && curl -X POST http://localhost:3000/api/manufacturers/scrape",
+    "daily:full": "npm run daily:scrape && npm run batch:scrape-iherb && npm run batch:backfill-amazon-prices && npm run batch:import-and-classify"
   },
   "dependencies": {
     "@google/genai": "^1.44.0",

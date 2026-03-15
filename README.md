@@ -142,6 +142,7 @@ npm run daily:full
 
 - **詳細仕様**: [SPEC.md](./SPEC.md) — サービス概要、DB設計、AI取り込みバッチ仕様、バッチ実行構成、セキュリティ、MVP条件、今後の実装予定
 - **デザインガイドライン**: [DESIGN_GUIDELINES.md](./DESIGN_GUIDELINES.md) — カラーパレット、タイポグラフィ、余白、コンポーネント設計ルール。フロントエンド実装時は必ず参照すること。
+- **実装サマリ・ドキュメント一覧**: [docs/IMPLEMENTATION_SUMMARY.md](./docs/IMPLEMENTATION_SUMMARY.md) — ソース別の取得・テーブル・関連ドキュメント一覧。マイプロテイン AI 抽出テストは [docs/MYPROTEIN_AI_EXTRACT_TEST.md](./docs/MYPROTEIN_AI_EXTRACT_TEST.md)。
 
 ## 今後の予定（概要）
 
