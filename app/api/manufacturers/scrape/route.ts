@@ -40,6 +40,12 @@ type ParsedProduct = {
   raw_flavor?: string | null
   raw_unit_text?: string | null
   raw_price_text?: string | null
+  // 栄養（manufacturer_products に migration でカラムがある場合に保存）
+  calories?: number | null
+  protein_g?: number | null
+  carbs_g?: number | null
+  fat_g?: number | null
+  nutrition_raw_text?: string | null
 }
 
 const MIN_DELAY_MS = 1500
@@ -240,17 +246,22 @@ function parseUnit(text: string): { unit_text: string | null; unit_kg: number | 
 }
 
 function parsePrice(text: string): { price_text: string | null; price_yen: number | null } {
-  // パターン例: ¥1,980 / 1,980円 / 税込1,980円
-  const match = text.match(/(?:[¥￥]\s*([\d,]+)|([\d,]+)\s*円)/)
-  if (!match) return { price_text: null, price_yen: null }
-
-  const raw = (match[1] ?? match[2] ?? "").replace(/,/g, "")
-  const numeric = Number(raw)
-  if (!Number.isFinite(numeric)) {
-    return { price_text: match[0], price_yen: null }
+  // パターン例: ¥1,980 / 1,980円 / 税込1,980円 / 11000（税込）※全角括弧
+  const patterns = [
+    /[¥￥]\s*([\d,]+)/,
+    /([\d,]+)\s*円\s*[（(]?税込[）)]?/,
+    /([\d,]+)\s*[（(]税込[）)]/,
+    /([\d,]+)\s*円/
+  ]
+  for (const re of patterns) {
+    const match = text.match(re)
+    if (match) {
+      const raw = (match[1] ?? "").replace(/,/g, "")
+      const numeric = Number(raw)
+      if (Number.isFinite(numeric)) return { price_text: match[0], price_yen: numeric }
+    }
   }
-
-  return { price_text: match[0], price_yen: numeric }
+  return { price_text: null, price_yen: null }
 }
 
 function extractFlavorFromText(text: string): string | null {
@@ -682,14 +693,38 @@ async function fetchMyroutineAjaxChunk(
     body: body.toString()
   })
   if (!res.ok) return ""
-  return res.text()
+  const text = await res.text()
+  // 実サイトは JSON { html: "..." } で返すため、html だけ取り出す
+  try {
+    const j = JSON.parse(text) as { html?: string }
+    if (j && typeof j.html === "string") return j.html
+  } catch {
+    /* そのまま text を HTML として使う */
+  }
+  return text
+}
+
+// 商品詳細ページの URL かどうか（/product_protein/スラッグ/ 形式のみ。concept, brand 等は除外）
+function isMyroutineProductDetailUrl(path: string): boolean {
+  const m = path.match(/^\/product_protein\/([^/]+)\/?$/)
+  return !!m && m[1].length > 0
 }
 
 // MY ROUTINE 一覧ページから商品詳細URLを抽出（初期HTML + admin-ajax で「もっと見る」分も取得）
 // - 実サイト: action=get_gellery_items, offset_post_num=36,72,... post_cat_id= で admin-ajax.php を叩く
+// - AJAX は JSON { html: "..." } で返るため fetchMyroutineAjaxChunk で html を抽出してからパース
 async function parseMyroutineListPage(html: string, listPageUrl: string): Promise<string[]> {
   const base = new URL(listPageUrl)
   const seen = collectProductLinksFromHtml(html, listPageUrl, base)
+  const productOnly = new Set<string>()
+  seen.forEach((u) => {
+    try {
+      const path = new URL(u).pathname.replace(/\/$/, "") || "/"
+      if (isMyroutineProductDetailUrl(path)) productOnly.add(u)
+    } catch {
+      /* ignore */
+    }
+  })
 
   let params = extractMyroutineAjaxParams(html)
   if (!params?.action && /myroutine\.jp/i.test(listPageUrl)) {
@@ -702,20 +737,87 @@ async function parseMyroutineListPage(html: string, listPageUrl: string): Promis
       const offset = chunk * OFFSET_STEP
       const chunkHtml = await fetchMyroutineAjaxChunk(listPageUrl, offset, params)
       if (!chunkHtml || chunkHtml.trim().length < 50) break
-      const before = seen.size
+      const before = productOnly.size
       const chunkLinks = collectProductLinksFromHtml(chunkHtml, listPageUrl, base)
-      chunkLinks.forEach((u) => seen.add(u))
-      if (chunkLinks.size === 0 || seen.size === before) break
+      chunkLinks.forEach((u) => {
+        try {
+          const path = new URL(u).pathname.replace(/\/$/, "") || "/"
+          if (isMyroutineProductDetailUrl(path)) productOnly.add(u)
+        } catch {
+          /* ignore */
+        }
+      })
+      if (productOnly.size === before) break
       await sleep(randomDelay())
     }
   }
 
-  return Array.from(seen)
+  return Array.from(productOnly)
+}
+
+// MY ROUTINE サイトの価格: 通常購入は .price1 + .price2（例: <span class="price1">11,000</span><span class="price2">円(税込)</span>）
+// :has() は Cheerio で未対応のため「通常購入」を含むブロックを手動で特定する
+function extractMyroutinePriceText($: ReturnType<typeof load>, html: string): string {
+  // 「通常購入」を含む要素のうち .price1 を持つブロックを探す（LINE UP の価格より先に取る）
+  const blocks = $("p, div, section").filter((_, el) => {
+    const text = $(el).text()
+    return /通常購入/.test(text) && $(el).find(".price1").length > 0
+  })
+  if (blocks.length > 0) {
+    const block = blocks.first()
+    const p1 = block.find(".price1").first().text().replace(/\s+/g, " ").trim()
+    const p2 = block.find(".price2").first().text().replace(/\s+/g, " ").trim()
+    if (p1) return p2 ? `${p1}${p2}`.trim() : `${p1}円(税込)`
+  }
+  // フォールバック: 文書順で最初の .price1 + .price2
+  const price1 = $(".price1").first().text().replace(/\s+/g, " ").trim()
+  const price2 = $(".price2").first().text().replace(/\s+/g, " ").trim()
+  if (price1 && price2) return `${price1}${price2}`.trim()
+  if (price1) return `${price1}円(税込)`
+  // HTML から <span class="price1">11,000</span> を直接探す
+  const price1Tag = html.match(/<span\s+class="price1"[^>]*>([\d,]+)<\/span>/i)
+  if (price1Tag) return `${price1Tag[1]}円(税込)`
+  const bottomArea = $(".bottom_area .price").first().text().replace(/\s+/g, " ").trim()
+  if (bottomArea) return bottomArea
+
+  // 正規表現フォールバック: 通常購入ブロック付近の価格（全角括弧も許容）
+  const normalPriceMatch = html.match(/通常購入[\s\S]*?([\d,]+)\s*[円]?\s*[（(]税込[）)]/i)
+  if (normalPriceMatch) return `${normalPriceMatch[1]}円(税込)`
+  const anyYen = html.match(/([\d,]+)\s*円\s*[（(]税込[）)]/)
+  if (anyYen) return `${anyYen[1]}円(税込)`
+  const yenMatch = html.match(/[¥￥]\s*([\d,]+)/)
+  if (yenMatch) return `${yenMatch[1]}円`
+  return ""
+}
+
+// 栄養成分表示ブロックから数値を抽出（g は半角・全角どちらも許容）
+// details > .answer 内の「エネルギー142kcal、たんぱく質26.6ｇ...」を対象にする
+function parseMyroutineNutrition(html: string, detailsAnswerText?: string): {
+  calories: number | null
+  protein_g: number | null
+  carbs_g: number | null
+  fat_g: number | null
+  nutrition_raw_text: string | null
+} {
+  const text = (detailsAnswerText ?? html).replace(/\s+/g, " ").trim()
+  const caloriesMatch = text.match(/エネルギー\s*([\d.]+)\s*kcal/i)
+  const proteinMatch = text.match(/たんぱく質\s*([\d.]+)\s*[gｇ]/i)
+  const fatMatch = text.match(/脂質\s*([\d.]+)\s*[gｇ]/i)
+  const carbsMatch = text.match(/炭水化物\s*([\d.]+)\s*[gｇ]/i)
+  const nutritionBlock = text.match(/栄養成分表示[\s\S]*?(?=原材料|取り扱い|$)/i)?.[0] ?? (detailsAnswerText ? text.slice(0, 500) : null)
+  return {
+    calories: caloriesMatch ? Number(caloriesMatch[1]) : null,
+    protein_g: proteinMatch ? Number(proteinMatch[1]) : null,
+    fat_g: fatMatch ? Number(fatMatch[1]) : null,
+    carbs_g: carbsMatch ? Number(carbsMatch[1]) : null,
+    nutrition_raw_text: nutritionBlock
+  }
 }
 
 // MY ROUTINE 専用パーサー（1商品の詳細ページ用）
 // - manufacturer_sources.manufacturer_code = 'myroutine' を想定
-// - 商品詳細ページの .bottom_area 内にある価格ブロックから価格を取得する
+// - 価格: 通常購入は .price1 + .price2、なければ .bottom_area .price
+// - 栄養: 栄養成分表示ブロックから正規表現で抽出
 function parseMyroutinePage(html: string, src: ManufacturerSource): ParsedProduct[] {
   const $ = load(html)
   const candidates: ParsedProduct[] = []
@@ -745,14 +847,20 @@ function parseMyroutinePage(html: string, src: ManufacturerSource): ParsedProduc
   // 容量はタイトル内の「1050g」などから推定
   const unitInfo = parseUnit(raw_product_name)
 
-  // 価格: .bottom_area .price のテキスト（例: 「￥4,280（税込）」）
-  const priceBlockText = $(".bottom_area .price")
-    .first()
-    .text()
-    .replace(/\s+/g, " ")
-    .trim()
-
+  // 価格: 通常購入 .price1 + .price2 を優先、なければ .bottom_area .price、さらに HTML 正規表現フォールバック
+  const priceBlockText = extractMyroutinePriceText($, html)
   const priceInfo = parsePrice(priceBlockText)
+
+  // 栄養: details > summary「栄養成分表示」内の .answer を優先（クリックしなくても DOM にはある）
+  let nutritionDetailsText: string | undefined
+  $(".specArea details, details").each((_, el) => {
+    const summary = $(el).find("summary").text().replace(/\s+/g, " ").trim()
+    if (/栄養成分/.test(summary)) {
+      nutritionDetailsText = $(el).find(".answer").text().replace(/\s+/g, " ").trim()
+      return false
+    }
+  })
+  const nutrition = parseMyroutineNutrition(html, nutritionDetailsText)
 
   // 画像は og:image を優先し、なければページ内の代表画像を探す
   let image_url: string | null = null
@@ -803,7 +911,12 @@ function parseMyroutinePage(html: string, src: ManufacturerSource): ParsedProduc
     raw_product_name,
     raw_flavor: flavorFromText ?? null,
     raw_unit_text: unitInfo.unit_text ?? null,
-    raw_price_text: priceBlockText || null
+    raw_price_text: priceBlockText || null,
+    calories: nutrition.calories,
+    protein_g: nutrition.protein_g,
+    carbs_g: nutrition.carbs_g,
+    fat_g: nutrition.fat_g,
+    nutrition_raw_text: nutrition.nutrition_raw_text
   })
 
   return candidates
@@ -842,6 +955,18 @@ async function runImportAndClassify(origin: string): Promise<{ importOk: boolean
 }
 
 export async function POST(req: Request) {
+  let body: {
+    manufacturer_code?: string
+    manufacturer_name?: string
+    product_url?: string
+  } = {}
+  try {
+    const text = await req.text()
+    if (text) body = JSON.parse(text) as typeof body
+  } catch {
+    /* body なし or 不正 JSON は無視 */
+  }
+
   const { data: sources, error } = await supabase
     .from("manufacturer_sources")
     .select("id, manufacturer_name, url, manufacturer_code")
@@ -861,9 +986,191 @@ export async function POST(req: Request) {
     )
   }
 
+  // 1商品だけ指定して更新（メーカー＋商品URLでその1件だけ新ロジックで取得・upsert）
+  if (body.product_url?.trim()) {
+    const productUrl = body.product_url.trim()
+    let productOrigin: string
+    try {
+      productOrigin = new URL(productUrl).origin
+    } catch {
+      return NextResponse.json(
+        { error: "product_url が不正です。", product_url: productUrl },
+        { status: 400 }
+      )
+    }
+
+    const normalizeForMatch = (v: string) =>
+      v.toLowerCase().replace(/\s+/g, "")
+    let candidateSources = (sources as ManufacturerSource[]).filter(
+      (s) => new URL(s.url).origin === productOrigin
+    )
+    if (body.manufacturer_code?.trim()) {
+      const code = body.manufacturer_code.trim().toLowerCase()
+      candidateSources = candidateSources.filter(
+        (s) =>
+          (s.manufacturer_code ?? "").toLowerCase() === code ||
+          normalizeForMatch(s.manufacturer_name ?? "") === code
+      )
+    } else if (body.manufacturer_name?.trim()) {
+      const name = body.manufacturer_name.trim()
+      candidateSources = candidateSources.filter(
+        (s) =>
+          (s.manufacturer_name ?? "").includes(name) ||
+          (s.manufacturer_name ?? "").toLowerCase() === name.toLowerCase()
+      )
+    }
+
+    if (candidateSources.length === 0) {
+      return NextResponse.json(
+        {
+          error: "指定した product_url に一致するメーカー登録がありません。",
+          product_url: productUrl,
+          hint: "manufacturer_name または manufacturer_code を指定してください。"
+        },
+        { status: 400 }
+      )
+    }
+    const src = candidateSources[0] as ManufacturerSource
+
+    const res = await fetch(productUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+      }
+    })
+    if (!res.ok) {
+      return NextResponse.json(
+        {
+          error: "商品ページの取得に失敗しました。",
+          product_url: productUrl,
+          status: res.status
+        },
+        { status: 502 }
+      )
+    }
+    const html = await res.text()
+    const code = (src.manufacturer_code ?? "").toLowerCase()
+    let parsed: ParsedProduct[] = []
+
+    if (code === "myprotein") {
+      parsed = parseMyproteinPage(html, { ...src, url: productUrl })
+    } else if (
+      code === "myroutine" ||
+      /myroutine\.jp/i.test(productUrl)
+    ) {
+      parsed = parseMyroutinePage(html, { ...src, url: productUrl })
+    } else {
+      parsed = parseManufacturerPage(
+        html,
+        productUrl,
+        src.manufacturer_name,
+        src.manufacturer_code
+      )
+    }
+
+    if (parsed.length === 0) {
+      return NextResponse.json(
+        {
+          error: "指定URLから商品情報を抽出できませんでした。",
+          product_url: productUrl
+        },
+        { status: 200 }
+      )
+    }
+
+    const rows = parsed.map((p) => ({
+      manufacturer_name: p.manufacturer_name,
+      manufacturer_code: p.manufacturer_code ?? null,
+      product_name: p.product_name,
+      flavor: p.flavor,
+      unit_text: p.unit_text,
+      unit_kg: p.unit_kg,
+      price_text: p.price_text,
+      price_yen: p.price_yen,
+      price_per_kg: p.price_per_kg,
+      image_url: p.image_url,
+      source_url: p.source_url,
+      raw_product_name: p.raw_product_name ?? p.product_name,
+      raw_flavor: p.raw_flavor ?? p.flavor,
+      raw_unit_text: p.raw_unit_text ?? p.unit_text,
+      raw_price_text: p.raw_price_text ?? p.price_text,
+      upsert_key: buildUpsertKey(p),
+      ...(p.calories != null && { calories: p.calories }),
+      ...(p.protein_g != null && { protein_g: p.protein_g }),
+      ...(p.carbs_g != null && { carbs_g: p.carbs_g }),
+      ...(p.fat_g != null && { fat_g: p.fat_g }),
+      ...(p.nutrition_raw_text != null && { nutrition_raw_text: p.nutrition_raw_text })
+    }))
+    const uniqueRows = Array.from(
+      new Map(rows.map((r) => [r.upsert_key, r])).values()
+    )
+
+    const { error: upsertError } = await supabase
+      .from("manufacturer_products")
+      .upsert(uniqueRows, { onConflict: "upsert_key" })
+
+    if (upsertError) {
+      console.error(upsertError)
+      return NextResponse.json(
+        {
+          error: "manufacturer_products への保存に失敗しました。",
+          details: upsertError.message
+        },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({
+      message: "1商品を更新しました。",
+      mode: "single_product",
+      product_url: productUrl,
+      manufacturer_name: src.manufacturer_name,
+      total_products: uniqueRows.length,
+      product_name: uniqueRows[0]?.product_name ?? null,
+      price_yen: uniqueRows[0]?.price_yen ?? null,
+      note: "一覧反映は手動で import と classify を実行するか、全体スクレイプ後に自動実行されます。"
+    })
+  }
+
+  const normalizeForMatch = (v: string) =>
+    v.toLowerCase().replace(/\s+/g, "")
+
+  let filtered = sources as ManufacturerSource[]
+  if (body.manufacturer_code?.trim()) {
+    const code = body.manufacturer_code.trim().toLowerCase()
+    filtered = filtered.filter((s) => {
+      const dbCode = (s.manufacturer_code ?? "").toLowerCase()
+      const dbNameNorm = normalizeForMatch(s.manufacturer_name ?? "")
+      return dbCode === code || dbNameNorm === code || dbNameNorm.includes(code)
+    })
+  } else if (body.manufacturer_name?.trim()) {
+    const name = body.manufacturer_name.trim()
+    filtered = filtered.filter(
+      (s) =>
+        (s.manufacturer_name ?? "").includes(name) ||
+        (s.manufacturer_name ?? "").toLowerCase() === name.toLowerCase()
+    )
+  }
+
+  if (filtered.length === 0) {
+    const hint = body.manufacturer_code
+      ? `manufacturer_code="${body.manufacturer_code}"`
+      : body.manufacturer_name
+        ? `manufacturer_name="${body.manufacturer_name}"`
+        : ""
+    return NextResponse.json(
+      {
+        message: "指定したメーカーに一致する登録がありません。",
+        hint: hint ? `指定: ${hint}` : null,
+        registered_count: sources.length
+      },
+      { status: 200 }
+    )
+  }
+
   const allParsed: ParsedProduct[] = []
 
-  for (const src of sources as ManufacturerSource[]) {
+  for (const src of filtered) {
     try {
       const res = await fetch(src.url, {
         headers: {
@@ -883,7 +1190,10 @@ export async function POST(req: Request) {
 
       if (code === "myprotein") {
         parsed = parseMyproteinPage(html, src)
-      } else if (code === "myroutine") {
+      } else if (
+        code === "myroutine" ||
+        (/myroutine\.jp/i.test(src.url) && /product_protein\/?$/i.test(new URL(src.url).pathname.replace(/\/$/, "")))
+      ) {
         const isListPage = /product_protein\/?$/i.test(new URL(src.url).pathname.replace(/\/$/, ""))
         if (isListPage) {
           const detailUrls = await parseMyroutineListPage(html, src.url)
@@ -948,7 +1258,6 @@ export async function POST(req: Request) {
   await enrichImagesFromDetailPages(allParsed)
 
   const rows = allParsed.map((p) => ({
-    // 生テキストは専用カラムにも保存しておく
     manufacturer_name: p.manufacturer_name,
     manufacturer_code: p.manufacturer_code ?? null,
     product_name: p.product_name,
@@ -964,7 +1273,12 @@ export async function POST(req: Request) {
     raw_flavor: p.raw_flavor ?? p.flavor,
     raw_unit_text: p.raw_unit_text ?? p.unit_text,
     raw_price_text: p.raw_price_text ?? p.price_text,
-    upsert_key: buildUpsertKey(p)
+    upsert_key: buildUpsertKey(p),
+    ...(p.calories != null && { calories: p.calories }),
+    ...(p.protein_g != null && { protein_g: p.protein_g }),
+    ...(p.carbs_g != null && { carbs_g: p.carbs_g }),
+    ...(p.fat_g != null && { fat_g: p.fat_g }),
+    ...(p.nutrition_raw_text != null && { nutrition_raw_text: p.nutrition_raw_text })
   }))
 
   // 同一 upsert_key が複数回含まれていると

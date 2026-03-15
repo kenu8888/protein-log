@@ -42,5 +42,13 @@ export function detectExcludedReason(text: string): ExcludedReason | null {
     return "other_supplement";
   }
 
+  // 注意書き・警告文（商品名でない）を除外
+  if (
+    t.includes("タンパク質不足に注意") ||
+    (t.includes("に注意") && !t.includes("プロテイン") && t.length < 80)
+  ) {
+    return "not_protein_related";
+  }
+
   return null;
 }

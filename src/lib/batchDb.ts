@@ -41,6 +41,40 @@ export async function fetchPendingSourceTexts(
   return (data ?? []) as SourceTextRow[];
 }
 
+/** 指定 ID の source_text を取得（status 不問）。再分類用。 */
+export async function fetchSourceTextsByIds(
+  ids: string[]
+): Promise<SourceTextRow[]> {
+  if (ids.length === 0) return [];
+  const client = getClient();
+  const { data, error } = await client
+    .from("protein_source_texts")
+    .select("id, source_name, source_url, raw_text, status, error_message, processed_at, created_at")
+    .in("id", ids);
+
+  if (error) throw new Error(`fetchSourceTextsByIds: ${error.message}`);
+  return (data ?? []) as SourceTextRow[];
+}
+
+/** 商品名・メーカー名で product_classification_results を検索し、該当する source_text_id のリストを返す。再分類用。 */
+export async function findSourceTextIdsByProduct(
+  manufacturer: string,
+  productName: string
+): Promise<string[]> {
+  const client = getClient();
+  const { data, error } = await client
+    .from("product_classification_results")
+    .select("source_text_id")
+    .ilike("display_manufacturer", `%${manufacturer}%`)
+    .ilike("display_product_name", `%${productName}%`);
+
+  if (error) throw new Error(`findSourceTextIdsByProduct: ${error.message}`);
+  const ids = (data ?? [])
+    .map((r) => (r as { source_text_id: string }).source_text_id)
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
 export type StatusUpdate = "processed" | "excluded" | "error";
 
 export async function updateSourceStatus(
@@ -88,6 +122,7 @@ export async function saveClassificationResult(
   let scrapedProteinG: number | null = null;
   let scrapedCarbs: number | null = null;
   let scrapedFat: number | null = null;
+  let scrapedUnitText: string | null = null;
 
   // Amazon 由来: scraped_products を優先（価格・画像・在庫・栄養は取得元で補完）
   if (
@@ -154,7 +189,7 @@ export async function saveClassificationResult(
     if (upsertKey) {
       const { data: mp, error: mpError } = await client
         .from("manufacturer_products")
-        .select("price_yen, price_per_kg, image_url")
+        .select("price_yen, price_per_kg, image_url, calories, protein_g, carbs_g, fat_g, unit_text")
         .eq("upsert_key", upsertKey)
         .maybeSingle();
 
@@ -172,6 +207,21 @@ export async function saveClassificationResult(
         }
         if (mp.image_url && !productImageUrl) {
           productImageUrl = mp.image_url as string;
+        }
+        if (typeof (mp as any).calories === "number") {
+          scrapedCalories = scrapedCalories ?? ((mp as any).calories as number);
+        }
+        if (typeof (mp as any).protein_g === "number") {
+          scrapedProteinG = scrapedProteinG ?? ((mp as any).protein_g as number);
+        }
+        if (typeof (mp as any).carbs_g === "number") {
+          scrapedCarbs = scrapedCarbs ?? ((mp as any).carbs_g as number);
+        }
+        if (typeof (mp as any).fat_g === "number") {
+          scrapedFat = scrapedFat ?? ((mp as any).fat_g as number);
+        }
+        if (typeof (mp as any).unit_text === "string" && (mp as any).unit_text) {
+          scrapedUnitText = (mp as any).unit_text as string;
         }
       }
     }
@@ -206,6 +256,21 @@ export async function saveClassificationResult(
     }
   }
 
+  // DB の check 制約に合わせる（Gemini が whey / pea 等を返すことがあるため）
+  const allowedProteinTypes = new Set([
+    "whey_wpc",
+    "whey_wpi",
+    "casein",
+    "soy",
+    "egg",
+    "beef",
+    "mixed",
+    "unknown",
+  ]);
+  const raw = result.protein_type?.trim();
+  const proteinType =
+    raw && allowedProteinTypes.has(raw) ? raw : "unknown";
+
   const row = {
     source_text_id: sourceTextId,
     is_protein_powder: result.is_protein_powder,
@@ -229,11 +294,12 @@ export async function saveClassificationResult(
     display_manufacturer: result.display_manufacturer,
     display_product_name: result.display_product_name,
     display_flavor: result.display_flavor,
-    protein_type: result.protein_type,
+    protein_type: proteinType,
     confidence: result.confidence,
     product_url: sourceRow?.source_url ?? null,
     product_image_url: productImageUrl,
     is_in_stock: isInStock,
+    unit_text: scrapedUnitText ?? null,
   };
 
   const { error } = await client

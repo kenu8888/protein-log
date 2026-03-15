@@ -121,6 +121,9 @@ type ClassifiedProtein = {
   product_image_url: string | null
   confidence: number | null
   is_in_stock?: boolean | null
+  unit_text?: string | null
+  /** 同一商品の複数容量（700g/1050g/3kg 等）をまとめたときの配列 */
+  capacityOptions?: { unit_text: string | null; price_jpy: number | null; price_per_kg: number | null }[]
 }
 
 function formatProductTitle(p: ClassifiedProtein): string {
@@ -159,6 +162,33 @@ function formatProductTitle(p: ClassifiedProtein): string {
 
   const result = parts.join(" ").trim()
   return result || name || manufacturer || "名称不明"
+}
+
+/** 同一商品の表記ゆれを吸収してグループ化するための正規化キー（例: マッスルストロベリー風味1050g / マッスルプロテイン ストロベリー → 同一キー） */
+function normalizedProductGroupKey(p: ClassifiedProtein): string {
+  const man = (p.display_manufacturer ?? p.manufacturer ?? "").trim()
+  const product = (p.display_product_name ?? p.product_name ?? "").trim()
+  const flavor = (p.display_flavor ?? p.flavor ?? "").trim()
+  let combined = [product, flavor].filter(Boolean).join(" ")
+  // 容量表記を除去（1050g, 3kg, 700g 等）
+  combined = combined.replace(/\d+(\.\d+)?\s*(kg|KG|ｋｇ|g|G|グラム|ml|mL)/g, "").trim()
+  // 表記ゆれの統一
+  combined = combined.replace(/風味/g, "").replace(/マッスルプロテイン/g, "マッスル").replace(/\s+/g, " ").trim()
+  const keyPart = combined.replace(/\s+/g, "")
+  return `${man}\0${keyPart}`
+}
+
+function formatCapacityPrices(
+  opts: { unit_text: string | null; price_jpy: number | null; price_per_kg: number | null }[]
+): string {
+  return opts
+    .map((o) => {
+      const label = (o.unit_text ?? "").trim() || "—"
+      const price = o.price_jpy ?? o.price_per_kg
+      if (price == null) return `${label}: —`
+      return `${label}: ¥${Math.round(price).toLocaleString()}`
+    })
+    .join(" / ")
 }
 
 function formatProductUrlLabel(url: string | null): string | null {
@@ -304,7 +334,7 @@ export default function Page() {
     const { data, error } = await supabase
       .from("product_classification_results")
       .select(
-        "id, manufacturer, product_name, flavor, price_jpy, protein_grams_per_serving, avg_rating, price_per_kg, flavor_category, display_manufacturer, display_product_name, display_flavor, product_url, product_image_url, confidence, is_in_stock, is_protein_powder"
+        "id, manufacturer, product_name, flavor, price_jpy, protein_grams_per_serving, avg_rating, price_per_kg, flavor_category, display_manufacturer, display_product_name, display_flavor, product_url, product_image_url, confidence, is_in_stock, is_protein_powder, unit_text"
       )
       .eq("is_protein_powder", true)
       .order("created_at", { ascending: false })
@@ -350,6 +380,7 @@ export default function Page() {
           typeof row.is_in_stock === "boolean"
             ? (row.is_in_stock as boolean)
             : null,
+        unit_text: (row.unit_text as string) ?? null,
       }))
     )
     setClassifiedMessage("")
@@ -411,6 +442,10 @@ export default function Page() {
   }
 
   const filteredClassified = classified.filter((p) => {
+    const man = (p.display_manufacturer ?? p.manufacturer ?? "").trim()
+    const name = (p.display_product_name ?? p.product_name ?? "").trim()
+    if (!man && !name) return false
+
     const q = searchQuery.trim().toLowerCase()
     if (q) {
       const text = [
@@ -459,13 +494,55 @@ export default function Page() {
     })
   }
 
+  const groupMap = new Map<string, ClassifiedProtein[]>()
+  for (const p of sortedClassified) {
+    const key = normalizedProductGroupKey(p)
+    if (!groupMap.has(key)) groupMap.set(key, [])
+    groupMap.get(key)!.push(p)
+  }
+  const groupedClassified: ClassifiedProtein[] = []
+  for (const rows of groupMap.values()) {
+    if (rows.length === 1) {
+      groupedClassified.push(rows[0])
+    } else {
+      const first = rows[0]
+      const perKgValues = rows.map((r) => r.price_per_kg).filter((n): n is number => n != null)
+      const minPerKg = perKgValues.length > 0 ? Math.min(...perKgValues) : null
+      // 表示名は「容量なし・短い」ものを優先（例: マッスルストロベリー風味 1050g → マッスルストロベリー風味）
+      const bestDisplay = rows.reduce((a, b) => {
+        const an = (a.display_product_name ?? a.product_name ?? "").replace(/\d+(\.\d+)?\s*(kg|g|G|グラム)/g, "").trim().length
+        const bn = (b.display_product_name ?? b.product_name ?? "").replace(/\d+(\.\d+)?\s*(kg|g|G|グラム)/g, "").trim().length
+        return an <= bn ? a : b
+      })
+      // グループ内のいずれかに入っていれば代表に反映（画像・URL・価格が先頭行だけ null のとき消えないように）
+      const pick = <K extends keyof ClassifiedProtein>(key: K): ClassifiedProtein[K] =>
+        (rows.find((r) => r[key] != null) as ClassifiedProtein | undefined)?.[key] ?? first[key]
+      groupedClassified.push({
+        ...first,
+        id: first.id,
+        display_product_name: bestDisplay.display_product_name ?? bestDisplay.product_name ?? first.display_product_name ?? first.product_name,
+        display_flavor: bestDisplay.display_flavor ?? bestDisplay.flavor ?? first.display_flavor ?? first.flavor,
+        price_per_kg: minPerKg ?? first.price_per_kg,
+        price_jpy: pick("price_jpy"),
+        product_image_url: pick("product_image_url"),
+        product_url: pick("product_url"),
+        protein_grams_per_serving: pick("protein_grams_per_serving"),
+        capacityOptions: rows.map((r) => ({
+          unit_text: r.unit_text ?? null,
+          price_jpy: r.price_jpy ?? null,
+          price_per_kg: r.price_per_kg ?? null,
+        })),
+      })
+    }
+  }
+
   const totalPages =
-    sortedClassified.length > 0
-      ? Math.ceil(sortedClassified.length / PAGE_SIZE)
+    groupedClassified.length > 0
+      ? Math.ceil(groupedClassified.length / PAGE_SIZE)
       : 1
   const safePage = Math.min(currentPage, totalPages)
   const startIndex = (safePage - 1) * PAGE_SIZE
-  const paginatedClassified = sortedClassified.slice(
+  const paginatedClassified = groupedClassified.slice(
     startIndex,
     startIndex + PAGE_SIZE
   )
@@ -834,12 +911,10 @@ export default function Page() {
                               )}
                             </div>
 
-                            {/* モバイル時: 製品名/フレーバーの横に価格を表示 */}
+                            {/* モバイル時: 製品名/フレーバーの横に価格を表示（複数容量の場合は1kgあたり最安を表示） */}
                             {p.price_per_kg != null && (
                               <div className="mt-0.5 flex flex-col items-end sm:hidden">
-                                <span className="text-[9px] text-gray-400">
-                                  1kgあたり
-                                </span>
+                                <span className="text-[9px] text-gray-400">1kgあたり</span>
                                 <span className="text-base font-semibold leading-snug text-gray-900">
                                   ¥{Math.round(p.price_per_kg).toLocaleString()}
                                 </span>
@@ -853,7 +928,7 @@ export default function Page() {
                         {/* 中央右: 価格・販売サイトタグ・フレーバーカテゴリ（PCでは横並び） */}
                         <div className="mt-2 hidden w-full flex-col gap-1 border-t border-gray-100 pt-2 text-[10px] text-gray-600 sm:mt-0 sm:flex sm:w-64 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
                           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                            {/* 価格 */}
+                            {/* 価格（複数容量の場合は1kgあたり最安を表示） */}
                             {p.price_per_kg != null ? (
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-1">
